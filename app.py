@@ -86,6 +86,9 @@ mov["Monto Neto"] = a_numero(mov["Monto Neto"])
 mov["Monto PEN"] = a_numero(mov["Monto PEN"])
 mov = mov.dropna(subset=["Fecha"])
 
+st.write("Columnas de Cuentas:", list(cuentas.columns))
+st.stop()
+
 cuentas["Saldo Inicial"] = a_numero(cuentas["Saldo Inicial"])
 
 # Mapear ID de cuenta a nombre
