@@ -41,10 +41,10 @@ def cargar_hoja(nombre_hoja):
     ws = sh.worksheet(nombre_hoja)
     # Los encabezados están en la fila 2 (fila 1 es el título)
     datos = ws.get_all_values()
-    if len(datos) < 3:
+    if len(datos) < 2:
         return pd.DataFrame()
-    encabezados = datos[1]
-    filas = datos[2:]
+    encabezados = datos[0]
+    filas = datos[1:]
     df = pd.DataFrame(filas, columns=encabezados)
     # Eliminar filas completamente vacías
     df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
