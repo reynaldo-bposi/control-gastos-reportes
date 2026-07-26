@@ -21,12 +21,23 @@ st.markdown("""
 <style>
 .block-container{padding-top:1.5rem;padding-bottom:2rem;max-width:900px;}
 section[data-testid="stSidebar"]{display:none;}
-.kpi{background:#f8f9fa;border-radius:10px;padding:10px 14px;text-align:center;}
-.kpi-label{font-size:11px;color:#868e96;text-transform:uppercase;
-  letter-spacing:.4px;margin-bottom:3px;}
-.kpi-val{font-size:19px;font-weight:700;}
-.kpi-doble{font-size:16px;font-weight:700;}
-.kpi-sep{color:#ced4da;font-weight:400;margin:0 4px;}
+
+div[data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:8px !important;}
+div[data-testid="stColumn"]{min-width:0 !important;}
+div[data-testid="stColumn"] label{font-size:11px !important;}
+div[data-baseweb="select"] > div{font-size:13px;}
+
+.kpi{background:#f8f9fa;border-radius:10px;padding:9px 12px;text-align:center;}
+.kpi-label{font-size:10px;color:#868e96;text-transform:uppercase;
+  letter-spacing:.4px;margin-bottom:2px;}
+.kpi-val{font-size:18px;font-weight:700;}
+.kpi-doble{font-size:15px;font-weight:700;}
+.kpi-sep{color:#ced4da;font-weight:400;margin:0 3px;}
+
+div[data-testid="stButton"] button{height:54px;border-radius:10px;
+  background:#f8f9fa;border:1px solid #e9ecef;font-size:13px;
+  padding:0 6px;line-height:1.2;}
+
 .mov-fecha{background:#f1f3f5;padding:4px 10px;font-size:12px;font-weight:600;
   color:#495057;border-radius:5px;margin:12px 0 0 0;}
 .mov-row{display:flex;align-items:center;justify-content:space-between;
@@ -204,7 +215,7 @@ mov["CatSub"] = (
 ).str.strip(" /").str.replace(" / nan", "", regex=False)
 
 # ══════════════════════════════════════════
-# FILTROS — ARRIBA DEL REPORTE
+# FILTROS
 # ══════════════════════════════════════════
 
 st.markdown("#### 📊 Extracto de cuenta")
@@ -219,9 +230,7 @@ if col_act:
         cta[col_act].astype(str).str.strip().str.lower().isin(["sí", "si", "yes", "true"])
     ]
 cta["_ord"] = a_numero(cta[col_ord]) if col_ord else range(len(cta))
-cta["_mon"] = (
-    cta[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
-)
+cta["_mon"] = cta[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
 cta["_pri"] = cta["_mon"].map({"PEN": 0, "USD": 1}).fillna(9)
 cta = cta.sort_values(["_pri", "_mon", "_ord", "Nombre Cuenta"])
 
@@ -244,42 +253,24 @@ fecha_min = mov["Fecha"].min().date()
 fecha_max = mov["Fecha"].max().date()
 hoy = datetime.now().date()
 
-with st.expander("⚙️  Filtros", expanded=True):
-    f1, f2 = st.columns(2)
-    with f1:
-        cuenta_sel = st.selectbox(
-            "Cuenta", opciones_cuenta, format_func=lambda x: etiquetas.get(x, x)
-        )
-    with f2:
-        periodo = st.selectbox(
-            "Periodo",
-            ["Este mes", "Últimos 30 días", "Últimos 60 días", "Últimos 90 días",
-             "Todo el historial", "Personalizado"],
-            index=4,
-        )
+f1, f2 = st.columns(2)
+with f1:
+    cuenta_sel = st.selectbox(
+        "Cuenta", opciones_cuenta, format_func=lambda x: etiquetas.get(x, x)
+    )
+with f2:
+    periodo = st.selectbox(
+        "Periodo",
+        ["Este mes", "Últimos 30 días", "Últimos 60 días", "Últimos 90 días",
+         "Todo el historial", "Personalizado"],
+        index=4,
+    )
 
-    f3, f4, f5 = st.columns(3)
-    with f3:
-        perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
-    with f4:
-        tipo_sel = st.selectbox(
-            "Tipo", ["Todos", "Egreso", "Ingreso", "Transferencia"]
-        )
-    with f5:
-        orden_sel = st.selectbox("Orden", ["Más reciente", "Más antiguo"])
-
-    if periodo == "Personalizado":
-        rango = st.date_input(
-            "Rango de fechas",
-            value=(fecha_min, fecha_max),
-            min_value=fecha_min,
-            max_value=fecha_max,
-            format="DD/MM/YYYY",
-        )
-        if isinstance(rango, tuple) and len(rango) == 2:
-            desde, hasta = rango
-        else:
-            desde, hasta = fecha_min, fecha_max
+f3, f4 = st.columns(2)
+with f3:
+    perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
+with f4:
+    tipo_sel = st.selectbox("Tipo", ["Todos", "Egreso", "Ingreso", "Transferencia"])
 
 if cuenta_sel.startswith("──"):
     cuenta_sel = "Todas"
@@ -294,8 +285,18 @@ elif periodo == "Últimos 90 días":
     desde, hasta = hoy - timedelta(days=90), hoy
 elif periodo == "Todo el historial":
     desde, hasta = fecha_min, fecha_max
-
-descendente = orden_sel == "Más reciente"
+else:
+    rango = st.date_input(
+        "Selecciona el rango de fechas",
+        value=(fecha_min, fecha_max),
+        min_value=fecha_min,
+        max_value=fecha_max,
+        format="DD/MM/YYYY",
+    )
+    if isinstance(rango, tuple) and len(rango) == 2:
+        desde, hasta = rango
+    else:
+        desde, hasta = fecha_min, fecha_max
 
 # ══════════════════════════════════════════
 # SALDO ACUMULADO — sobre TODO el historial
@@ -329,19 +330,18 @@ if perfil_sel != "Todos" and "Perfil" in df.columns:
 if tipo_sel != "Todos" and "Tipo Mov." in df.columns:
     df = df[df["Tipo Mov."].astype(str).str.strip() == tipo_sel]
 
-df = df.sort_values(
-    ["Fecha", "_RowNumber"], ascending=[not descendente, not descendente]
-).reset_index(drop=True)
+# ══════════════════════════════════════════
+# KPIs + BOTÓN DE ORDEN
+# ══════════════════════════════════════════
 
-# ══════════════════════════════════════════
-# KPIs
-# ══════════════════════════════════════════
+if "desc" not in st.session_state:
+    st.session_state.desc = True
 
 ingresos = df[df["Monto Neto"] > 0]["Monto Neto"].sum()
 egresos = df[df["Monto Neto"] < 0]["Monto Neto"].sum()
 saldo_actual = base["Saldo Cierre"].iloc[-1] if len(base) > 0 else saldo_inicial
 
-k1, k2 = st.columns(2)
+k1, k2, k3 = st.columns([4, 3, 1.4])
 with k1:
     st.markdown(
         f'<div class="kpi"><div class="kpi-label">Ingresos / Egresos</div>'
@@ -357,6 +357,16 @@ with k2:
         f'<div class="kpi-val {clase}">S/ {fmt(saldo_actual)}</div></div>',
         unsafe_allow_html=True,
     )
+with k3:
+    flecha = "↓" if st.session_state.desc else "↑"
+    if st.button(f"{flecha}\nFecha", use_container_width=True):
+        st.session_state.desc = not st.session_state.desc
+
+descendente = st.session_state.desc
+
+df = df.sort_values(
+    ["Fecha", "_RowNumber"], ascending=[not descendente, not descendente]
+).reset_index(drop=True)
 
 st.caption(
     f"{len(df)} movimientos · {fecha_es(desde, False)} al {fecha_es(hasta, False)}"
