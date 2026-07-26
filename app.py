@@ -78,8 +78,6 @@ if mov.empty:
     st.warning("No hay movimientos registrados todavía.")
     st.stop()
 
-st.write("Columnas encontradas:", list(mov.columns))
-st.stop()
 
 # Limpieza de datos
 mov["Fecha"] = pd.to_datetime(mov["Fecha"], dayfirst=True, errors="coerce")
