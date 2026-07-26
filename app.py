@@ -34,9 +34,10 @@ div[data-baseweb="select"] > div{font-size:13px;}
 .kpi-doble{font-size:15px;font-weight:700;}
 .kpi-sep{color:#ced4da;font-weight:400;margin:0 3px;}
 
-div[data-testid="stButton"] button{height:54px;border-radius:10px;
-  background:#f8f9fa;border:1px solid #e9ecef;font-size:13px;
-  padding:0 6px;line-height:1.2;}
+div[data-testid="stButton"] button{height:28px;min-height:28px;border-radius:6px;
+  background:#f8f9fa;border:1px solid #e9ecef;font-size:12px;
+  padding:0 8px;line-height:1;}
+.fila-orden{font-size:12px;color:#868e96;padding-top:6px;}
 
 .mov-fecha{background:#f1f3f5;padding:4px 10px;font-size:12px;font-weight:600;
   color:#495057;border-radius:5px;margin:12px 0 0 0;}
@@ -341,7 +342,7 @@ ingresos = df[df["Monto Neto"] > 0]["Monto Neto"].sum()
 egresos = df[df["Monto Neto"] < 0]["Monto Neto"].sum()
 saldo_actual = base["Saldo Cierre"].iloc[-1] if len(base) > 0 else saldo_inicial
 
-k1, k2, k3 = st.columns([4, 3, 1.4])
+k1, k2 = st.columns(2)
 with k1:
     st.markdown(
         f'<div class="kpi"><div class="kpi-label">Ingresos / Egresos</div>'
@@ -357,9 +358,18 @@ with k2:
         f'<div class="kpi-val {clase}">S/ {fmt(saldo_actual)}</div></div>',
         unsafe_allow_html=True,
     )
-with k3:
+
+# ── Fila: resumen del periodo + botón de orden ──
+r1, r2 = st.columns([5, 1.5])
+with r1:
+    st.markdown(
+        f'<div class="fila-orden">{len(df)} movimientos · '
+        f'{fecha_es(desde, False)} al {fecha_es(hasta, False)}</div>',
+        unsafe_allow_html=True,
+    )
+with r2:
     flecha = "↓" if st.session_state.desc else "↑"
-    if st.button(f"{flecha}\nFecha", use_container_width=True):
+    if st.button(f"{flecha} Fecha", use_container_width=True):
         st.session_state.desc = not st.session_state.desc
 
 descendente = st.session_state.desc
@@ -367,10 +377,6 @@ descendente = st.session_state.desc
 df = df.sort_values(
     ["Fecha", "_RowNumber"], ascending=[not descendente, not descendente]
 ).reset_index(drop=True)
-
-st.caption(
-    f"{len(df)} movimientos · {fecha_es(desde, False)} al {fecha_es(hasta, False)}"
-)
 
 if len(df) == 0:
     st.info("No hay movimientos en el periodo seleccionado.")
@@ -420,4 +426,4 @@ st.download_button(
     data=csv,
     file_name=f"extracto_{cuenta_sel.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv",
     mime="text/csv",
-)
+    )
