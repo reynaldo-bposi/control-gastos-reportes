@@ -34,19 +34,17 @@ def conectar_sheets():
 
 
 @st.cache_data(ttl=300)
-def cargar_hoja(nombre_hoja):
+def cargar_hoja(nombre_hoja, fila_encabezado=0):
     """Carga una hoja del Google Sheets como DataFrame."""
     gc = conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(nombre_hoja)
-    # Los encabezados están en la fila 2 (fila 1 es el título)
     datos = ws.get_all_values()
-    if len(datos) < 2:
+    if len(datos) <= fila_encabezado + 1:
         return pd.DataFrame()
-    encabezados = datos[0]
-    filas = datos[1:]
+    encabezados = datos[fila_encabezado]
+    filas = datos[fila_encabezado + 1:]
     df = pd.DataFrame(filas, columns=encabezados)
-    # Eliminar filas completamente vacías
     df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
     return df
 
@@ -68,8 +66,8 @@ def a_numero(serie):
 # ══════════════════════════════════════════
 
 try:
-    mov = cargar_hoja("📋 Movimientos")
-    cuentas = cargar_hoja("🏦 Cuentas")
+    mov = cargar_hoja("📋 Movimientos", fila_encabezado=0)
+    cuentas = cargar_hoja("🏦 Cuentas", fila_encabezado=1)
 except Exception as e:
     st.error(f"Error al conectar con Google Sheets: {e}")
     st.stop()
@@ -85,9 +83,6 @@ mov["Monto"] = a_numero(mov["Monto"])
 mov["Monto Neto"] = a_numero(mov["Monto Neto"])
 mov["Monto PEN"] = a_numero(mov["Monto PEN"])
 mov = mov.dropna(subset=["Fecha"])
-
-st.write("Columnas de Cuentas:", list(cuentas.columns))
-st.stop()
 
 cuentas["Saldo Inicial"] = a_numero(cuentas["Saldo Inicial"])
 
