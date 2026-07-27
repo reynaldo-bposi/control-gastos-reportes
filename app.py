@@ -31,7 +31,9 @@ div[data-baseweb="select"] > div{font-size:13px;}
 .kpi-label{font-size:10px;color:#868e96;text-transform:uppercase;
   letter-spacing:.4px;margin-bottom:2px;}
 .kpi-val{font-size:18px;font-weight:700;}
-.kpi-doble{font-size:15px;font-weight:700;}
+.kpi-doble{font-size:15px;font-weight:700;display:flex;flex-wrap:wrap;
+  justify-content:center;align-items:baseline;gap:2px 10px;}
+.kpi-doble span{white-space:nowrap;}
 .kpi-sep{color:#ced4da;font-weight:400;margin:0 3px;}
 
 div[data-testid="stButton"] button{height:28px;min-height:28px;border-radius:6px;
@@ -379,7 +381,6 @@ with k1:
     st.markdown(
         f'<div class="kpi"><div class="kpi-label">Ingresos / Egresos</div>'
         f'<div class="kpi-doble"><span class="pos">+{fmt(ingresos)}</span>'
-        f'<span class="kpi-sep">/</span>'
         f'<span class="neg">-{fmt(abs(egresos))}</span></div></div>',
         unsafe_allow_html=True,
     )
