@@ -167,6 +167,26 @@ def cargar_opcional(nombre):
         return pd.DataFrame()
 
 
+@st.dialog("📅 Rango de fechas")
+def dialogo_fechas(fmin, fmax):
+    actual = st.session_state.get("rango_custom", (fmin, fmax))
+    r = st.date_input(
+        "Selecciona la fecha de inicio y la de fin",
+        value=actual,
+        min_value=fmin,
+        max_value=fmax,
+        format="DD/MM/YYYY",
+        key="cal_dialogo",
+    )
+    c1, c2 = st.columns(2)
+    if c1.button("Aplicar", use_container_width=True, type="primary"):
+        if isinstance(r, tuple) and len(r) == 2:
+            st.session_state["rango_custom"] = r
+        st.rerun()
+    if c2.button("Cancelar", use_container_width=True):
+        st.rerun()
+
+
 # ══════════════════════════════════════════
 # CARGA DE DATOS
 # ══════════════════════════════════════════
@@ -296,27 +316,25 @@ OPCIONES_PERIODO = [
 
 periodo_prev = st.session_state.get("periodo_sel", "Todo el historial")
 
-if periodo_prev == "Personalizado":
-    f1, f2, f3 = st.columns([2, 2, 1.6])
-else:
-    f1, f2 = st.columns(2)
-    f3 = None
-
+# ── Primera línea: Cuenta | Proyecto ──
+f1, f2 = st.columns(2)
 with f1:
     cuenta_sel = st.selectbox(
         "Cuenta", opciones_cuenta, format_func=lambda x: etiquetas.get(x, x)
     )
 with f2:
+    proyecto_sel = st.selectbox("Proyecto", opciones_proy)
+
+# ── Segunda línea: Periodo | Perfil | Tipo ──
+g1, g2, g3 = st.columns([1.8, 1.3, 1.3])
+
+with g1:
     periodo = st.selectbox(
         "Periodo", OPCIONES_PERIODO,
         index=OPCIONES_PERIODO.index(periodo_prev)
         if periodo_prev in OPCIONES_PERIODO else 5,
         key="periodo_sel",
     )
-
-g1, g2, g3 = st.columns([2, 1.4, 1.4])
-with g1:
-    proyecto_sel = st.selectbox("Proyecto", opciones_proy)
 with g2:
     perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
 with g3:
@@ -345,24 +363,9 @@ elif periodo == "Todo el historial":
 else:
     guardado = st.session_state.get("rango_custom", (fecha_min, fecha_max))
     desde, hasta = guardado[0], guardado[1]
-    if f3 is not None:
-        with f3:
-            st.markdown('<div class="lbl-cal">Fechas</div>', unsafe_allow_html=True)
-            with st.popover(
-                f"📅 {desde.strftime('%d/%m/%y')} — {hasta.strftime('%d/%m/%y')}",
-                use_container_width=True,
-            ):
-                rango = st.date_input(
-                    "Selecciona inicio y fin",
-                    value=(desde, hasta),
-                    min_value=fecha_min,
-                    max_value=fecha_max,
-                    format="DD/MM/YYYY",
-                    key="cal_custom",
-                )
-                if isinstance(rango, tuple) and len(rango) == 2:
-                    st.session_state["rango_custom"] = rango
-                    desde, hasta = rango
+    # Se abre el calendario apenas se elige "Personalizado"
+    if periodo_prev != "Personalizado" or st.session_state.pop("reabrir_cal", False):
+        dialogo_fechas(fecha_min, fecha_max)
 
 # ══════════════════════════════════════════
 # SALDO ACUMULADO — sobre TODO el historial
@@ -441,13 +444,23 @@ with k2:
     )
 
 # ── Resumen del periodo + orden ──
-r1, r2 = st.columns([5, 1.5])
+if periodo == "Personalizado":
+    r1, rcal, r2 = st.columns([3.6, 1.4, 1.5])
+else:
+    r1, r2 = st.columns([5, 1.5])
+    rcal = None
+
 with r1:
     st.markdown(
         f'<div class="fila-orden">{len(df)} movimientos · '
         f'{fecha_es(desde, False)} al {fecha_es(hasta, False)}</div>',
         unsafe_allow_html=True,
     )
+if rcal is not None:
+    with rcal:
+        if st.button("📅 Cambiar", use_container_width=True):
+            st.session_state["reabrir_cal"] = True
+            st.rerun()
 with r2:
     flecha = "↓" if st.session_state.desc else "↑"
     if st.button(f"{flecha} Fecha", use_container_width=True):
