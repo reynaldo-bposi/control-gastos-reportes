@@ -37,6 +37,9 @@ div[data-baseweb="select"] > div{font-size:13px;}
 div[data-testid="stButton"] button{height:28px;min-height:28px;border-radius:6px;
   background:#f8f9fa;border:1px solid #e9ecef;font-size:12px;
   padding:0 8px;line-height:1;}
+div[data-testid="stPopover"] button{height:38px;min-height:38px;font-size:12px;
+  border-radius:8px;}
+.lbl-cal{font-size:11px;color:#31333f;margin-bottom:5px;}
 .fila-orden{font-size:12px;color:#868e96;padding-top:6px;}
 
 .mov-fecha{background:#f1f3f5;padding:4px 10px;font-size:12px;font-weight:600;
@@ -254,30 +257,50 @@ fecha_min = mov["Fecha"].min().date()
 fecha_max = mov["Fecha"].max().date()
 hoy = datetime.now().date()
 
-f1, f2 = st.columns(2)
+OPCIONES_PERIODO = [
+    "Este mes", "Mes anterior", "Últimos 30 días", "Últimos 60 días",
+    "Últimos 90 días", "Todo el historial", "Personalizado",
+]
+
+# Se lee el valor previo para saber si mostrar el calendario en la misma fila
+periodo_prev = st.session_state.get("periodo_sel", "Todo el historial")
+
+if periodo_prev == "Personalizado":
+    f1, f2, f3 = st.columns([2, 2, 1.6])
+else:
+    f1, f2 = st.columns(2)
+    f3 = None
+
 with f1:
     cuenta_sel = st.selectbox(
         "Cuenta", opciones_cuenta, format_func=lambda x: etiquetas.get(x, x)
     )
 with f2:
     periodo = st.selectbox(
-        "Periodo",
-        ["Este mes", "Últimos 30 días", "Últimos 60 días", "Últimos 90 días",
-         "Todo el historial", "Personalizado"],
-        index=4,
+        "Periodo", OPCIONES_PERIODO,
+        index=OPCIONES_PERIODO.index(periodo_prev)
+        if periodo_prev in OPCIONES_PERIODO else 5,
+        key="periodo_sel",
     )
 
-f3, f4 = st.columns(2)
-with f3:
-    perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
+f4, f5 = st.columns(2)
 with f4:
+    perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
+with f5:
     tipo_sel = st.selectbox("Tipo", ["Todos", "Egreso", "Ingreso", "Transferencia"])
 
 if cuenta_sel.startswith("──"):
     cuenta_sel = "Todas"
 
+# ── Cálculo del rango según el periodo elegido ──
+primero_mes = hoy.replace(day=1)
+fin_mes_ant = primero_mes - timedelta(days=1)
+ini_mes_ant = fin_mes_ant.replace(day=1)
+
 if periodo == "Este mes":
-    desde, hasta = hoy.replace(day=1), hoy
+    desde, hasta = primero_mes, hoy
+elif periodo == "Mes anterior":
+    desde, hasta = ini_mes_ant, fin_mes_ant
 elif periodo == "Últimos 30 días":
     desde, hasta = hoy - timedelta(days=30), hoy
 elif periodo == "Últimos 60 días":
@@ -287,17 +310,26 @@ elif periodo == "Últimos 90 días":
 elif periodo == "Todo el historial":
     desde, hasta = fecha_min, fecha_max
 else:
-    rango = st.date_input(
-        "Selecciona el rango de fechas",
-        value=(fecha_min, fecha_max),
-        min_value=fecha_min,
-        max_value=fecha_max,
-        format="DD/MM/YYYY",
-    )
-    if isinstance(rango, tuple) and len(rango) == 2:
-        desde, hasta = rango
-    else:
-        desde, hasta = fecha_min, fecha_max
+    desde = st.session_state.get("rango_custom", (fecha_min, fecha_max))[0]
+    hasta = st.session_state.get("rango_custom", (fecha_min, fecha_max))[1]
+    if f3 is not None:
+        with f3:
+            st.markdown('<div class="lbl-cal">Fechas</div>', unsafe_allow_html=True)
+            with st.popover(
+                f"📅 {desde.strftime('%d/%m/%y')} — {hasta.strftime('%d/%m/%y')}",
+                use_container_width=True,
+            ):
+                rango = st.date_input(
+                    "Selecciona inicio y fin",
+                    value=(desde, hasta),
+                    min_value=fecha_min,
+                    max_value=fecha_max,
+                    format="DD/MM/YYYY",
+                    key="cal_custom",
+                )
+                if isinstance(rango, tuple) and len(rango) == 2:
+                    st.session_state["rango_custom"] = rango
+                    desde, hasta = rango
 
 # ══════════════════════════════════════════
 # SALDO ACUMULADO — sobre TODO el historial
@@ -426,4 +458,4 @@ st.download_button(
     data=csv,
     file_name=f"extracto_{cuenta_sel.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv",
     mime="text/csv",
-    )
+)
