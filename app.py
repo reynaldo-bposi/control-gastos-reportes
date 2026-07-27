@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 SHEET_ID = "1Wx5N3uAi-_4iLpYOibXgXisT3PizOlwDWQtAn1str_w"
 
 st.set_page_config(
-    page_title="Control de Gastos — Extracto",
+    page_title="Movimientos",
     page_icon="📊",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -19,13 +19,15 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.block-container{padding-top:1.5rem;padding-bottom:2rem;max-width:900px;}
+.block-container{padding-top:3rem;padding-bottom:2rem;max-width:900px;}
 section[data-testid="stSidebar"]{display:none;}
 
 div[data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:8px !important;}
 div[data-testid="stColumn"]{min-width:0 !important;}
 div[data-testid="stColumn"] label{font-size:11px !important;}
 div[data-baseweb="select"] > div{font-size:13px;}
+
+.titulo{font-size:22px;font-weight:700;line-height:1.4;padding:2px 0 10px 0;}
 
 .kpi{background:#f8f9fa;border-radius:10px;padding:9px 12px;text-align:center;}
 .kpi-label{font-size:10px;color:#868e96;text-transform:uppercase;
@@ -34,7 +36,6 @@ div[data-baseweb="select"] > div{font-size:13px;}
 .kpi-doble{font-size:15px;font-weight:700;display:flex;flex-wrap:wrap;
   justify-content:center;align-items:baseline;gap:2px 10px;}
 .kpi-doble span{white-space:nowrap;}
-.kpi-sep{color:#ced4da;font-weight:400;margin:0 3px;}
 
 div[data-testid="stButton"] button{height:28px;min-height:28px;border-radius:6px;
   background:#f8f9fa;border:1px solid #e9ecef;font-size:12px;
@@ -71,6 +72,7 @@ DIAS = {
     0: "lunes", 1: "martes", 2: "miércoles", 3: "jueves", 4: "viernes",
     5: "sábado", 6: "domingo",
 }
+ACTIVOS = ["sí", "si", "yes", "true", "activo", "activa"]
 
 
 def fecha_es(d, con_dia=True):
@@ -181,6 +183,7 @@ cats = cargar_opcional("🗂️ Categorías")
 if cats.empty:
     cats = cargar_opcional("⚙️ Categorías")
 subcats = cargar_opcional("🏷️ Subcategorías")
+proyectos = cargar_opcional("📁 Proyectos")
 
 if mov.empty:
     st.warning("No hay movimientos registrados todavía.")
@@ -197,6 +200,7 @@ d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
+d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
 
 mov["Cuenta Nombre"] = traducir(mov["Cuenta"], d_cuentas)
 if "Cuenta Destino" in mov.columns:
@@ -206,6 +210,9 @@ mov["Beneficiario Nombre"] = (
 )
 mov["Cat Nombre"] = traducir(mov["Categoría"], d_cats) if "Categoría" in mov.columns else ""
 mov["Sub Nombre"] = traducir(mov["Sub Categ."], d_subs) if "Sub Categ." in mov.columns else ""
+mov["Proyecto Nombre"] = (
+    traducir(mov["Proyecto"], d_proy) if "Proyecto" in mov.columns else ""
+)
 
 desc = pd.Series("", index=mov.index)
 if "Tipo Mov." in mov.columns and "Cuenta Destino Nombre" in mov.columns:
@@ -221,20 +228,26 @@ mov["CatSub"] = (
 ).str.strip(" /").str.replace(" / nan", "", regex=False)
 
 # ══════════════════════════════════════════
-# FILTROS
+# TÍTULO + TOGGLE ACTIVOS
 # ══════════════════════════════════════════
 
-st.markdown("#### 📊 Extracto de cuenta")
+t1, t2 = st.columns([3, 1.6])
+with t1:
+    st.markdown('<div class="titulo">📊 Movimientos</div>', unsafe_allow_html=True)
+with t2:
+    solo_activos = st.toggle("Solo activos", value=True)
+
+# ══════════════════════════════════════════
+# LISTAS DE CUENTAS Y PROYECTOS
+# ══════════════════════════════════════════
 
 col_act = buscar_col(cuentas, ["Activa", "Activo"])
 col_ord = buscar_col(cuentas, ["Orden", "orden", "N° Orden"])
 col_mon = buscar_col(cuentas, ["Moneda"])
 
 cta = cuentas.copy()
-if col_act:
-    cta = cta[
-        cta[col_act].astype(str).str.strip().str.lower().isin(["sí", "si", "yes", "true"])
-    ]
+if solo_activos and col_act:
+    cta = cta[cta[col_act].astype(str).str.strip().str.lower().isin(ACTIVOS)]
 cta["_ord"] = a_numero(cta[col_ord]) if col_ord else range(len(cta))
 cta["_mon"] = cta[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
 cta["_pri"] = cta["_mon"].map({"PEN": 0, "USD": 1}).fillna(9)
@@ -255,16 +268,32 @@ for _, r in cta.iterrows():
     opciones_cuenta.append(nombre)
     etiquetas[nombre] = f"   {nombre}"
 
+# Proyectos
+opciones_proy = ["Todos"]
+if not proyectos.empty:
+    col_est_p = buscar_col(proyectos, ["Estado", "Activo", "Activa"])
+    col_nom_p = buscar_col(proyectos, ["Nombre Proyecto", "Nombre"])
+    prj = proyectos.copy()
+    if solo_activos and col_est_p:
+        prj = prj[prj[col_est_p].astype(str).str.strip().str.lower().isin(ACTIVOS)]
+    if col_nom_p:
+        opciones_proy += sorted(
+            [n for n in prj[col_nom_p].astype(str).str.strip().unique() if n]
+        )
+
 fecha_min = mov["Fecha"].min().date()
 fecha_max = mov["Fecha"].max().date()
 hoy = datetime.now().date()
+
+# ══════════════════════════════════════════
+# FILTROS
+# ══════════════════════════════════════════
 
 OPCIONES_PERIODO = [
     "Este mes", "Mes anterior", "Últimos 30 días", "Últimos 60 días",
     "Últimos 90 días", "Todo el historial", "Personalizado",
 ]
 
-# Se lee el valor previo para saber si mostrar el calendario en la misma fila
 periodo_prev = st.session_state.get("periodo_sel", "Todo el historial")
 
 if periodo_prev == "Personalizado":
@@ -285,16 +314,18 @@ with f2:
         key="periodo_sel",
     )
 
-f4, f5 = st.columns(2)
-with f4:
+g1, g2, g3 = st.columns([2, 1.4, 1.4])
+with g1:
+    proyecto_sel = st.selectbox("Proyecto", opciones_proy)
+with g2:
     perfil_sel = st.selectbox("Perfil", ["Todos", "Personal", "Empresa"])
-with f5:
+with g3:
     tipo_sel = st.selectbox("Tipo", ["Todos", "Egreso", "Ingreso", "Transferencia"])
 
 if cuenta_sel.startswith("──"):
     cuenta_sel = "Todas"
 
-# ── Cálculo del rango según el periodo elegido ──
+# ── Rango de fechas ──
 primero_mes = hoy.replace(day=1)
 fin_mes_ant = primero_mes - timedelta(days=1)
 ini_mes_ant = fin_mes_ant.replace(day=1)
@@ -312,8 +343,8 @@ elif periodo == "Últimos 90 días":
 elif periodo == "Todo el historial":
     desde, hasta = fecha_min, fecha_max
 else:
-    desde = st.session_state.get("rango_custom", (fecha_min, fecha_max))[0]
-    hasta = st.session_state.get("rango_custom", (fecha_min, fecha_max))[1]
+    guardado = st.session_state.get("rango_custom", (fecha_min, fecha_max))
+    desde, hasta = guardado[0], guardado[1]
     if f3 is not None:
         with f3:
             st.markdown('<div class="lbl-cal">Fechas</div>', unsafe_allow_html=True)
@@ -338,17 +369,28 @@ else:
 # ══════════════════════════════════════════
 
 base = mov.copy()
+saldo_inicial = 0.0
 
 if cuenta_sel != "Todas":
     base = base[base["Cuenta Nombre"] == cuenta_sel]
     ids = [k for k, v in d_cuentas.items() if v == cuenta_sel]
-    saldo_inicial = 0.0
     if ids:
         fila = cuentas[cuentas["ID"].astype(str).str.strip() == ids[0]]
         if not fila.empty:
             saldo_inicial = float(fila["Saldo Inicial"].iloc[0])
-else:
-    saldo_inicial = float(cuentas["Saldo Inicial"].sum())
+elif proyecto_sel == "Todos":
+    ctas_visibles = set(cta["Nombre Cuenta"].astype(str).str.strip())
+    base = base[base["Cuenta Nombre"].isin(ctas_visibles)]
+    saldo_inicial = float(
+        cuentas[
+            cuentas["Nombre Cuenta"].astype(str).str.strip().isin(ctas_visibles)
+        ]["Saldo Inicial"].sum()
+    )
+
+if proyecto_sel != "Todos":
+    base = base[base["Proyecto Nombre"] == proyecto_sel]
+    if cuenta_sel == "Todas":
+        saldo_inicial = 0.0
 
 base = base.sort_values(["Fecha", "_RowNumber"], ascending=[True, True])
 base["Saldo Cierre"] = saldo_inicial + base["Monto Neto"].cumsum()
@@ -366,7 +408,7 @@ if tipo_sel != "Todos" and "Tipo Mov." in df.columns:
     df = df[df["Tipo Mov."].astype(str).str.strip() == tipo_sel]
 
 # ══════════════════════════════════════════
-# KPIs + BOTÓN DE ORDEN
+# KPIs
 # ══════════════════════════════════════════
 
 if "desc" not in st.session_state:
@@ -375,6 +417,12 @@ if "desc" not in st.session_state:
 ingresos = df[df["Monto Neto"] > 0]["Monto Neto"].sum()
 egresos = df[df["Monto Neto"] < 0]["Monto Neto"].sum()
 saldo_actual = base["Saldo Cierre"].iloc[-1] if len(base) > 0 else saldo_inicial
+
+etiqueta_saldo = (
+    "Neto del proyecto"
+    if (proyecto_sel != "Todos" and cuenta_sel == "Todas")
+    else "Saldo actual"
+)
 
 k1, k2 = st.columns(2)
 with k1:
@@ -387,12 +435,12 @@ with k1:
 with k2:
     clase = "pos" if saldo_actual >= 0 else "neg"
     st.markdown(
-        f'<div class="kpi"><div class="kpi-label">Saldo actual</div>'
+        f'<div class="kpi"><div class="kpi-label">{etiqueta_saldo}</div>'
         f'<div class="kpi-val {clase}">S/ {fmt(saldo_actual)}</div></div>',
         unsafe_allow_html=True,
     )
 
-# ── Fila: resumen del periodo + botón de orden ──
+# ── Resumen del periodo + orden ──
 r1, r2 = st.columns([5, 1.5])
 with r1:
     st.markdown(
@@ -412,7 +460,7 @@ df = df.sort_values(
 ).reset_index(drop=True)
 
 if len(df) == 0:
-    st.info("No hay movimientos en el periodo seleccionado.")
+    st.info("No hay movimientos con los filtros seleccionados.")
     st.stop()
 
 # ══════════════════════════════════════════
@@ -428,12 +476,12 @@ for _, r in df.iterrows():
         fecha_actual = f
     signo = "pos" if r["Monto Neto"] >= 0 else "neg"
     monto = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
-    cuenta_txt = f" · {r['Cuenta Nombre']}" if cuenta_sel == "Todas" else ""
+    extra = f" · {r['Cuenta Nombre']}" if cuenta_sel == "Todas" else ""
     html.append(
         f'<div class="mov-row">'
         f'<div class="mov-izq">'
         f'<span class="mov-desc {signo}">{r["Desc"]}</span>'
-        f'<span class="mov-cat">{r["CatSub"]}{cuenta_txt}</span>'
+        f'<span class="mov-cat">{r["CatSub"]}{extra}</span>'
         f'</div>'
         f'<div class="mov-der">'
         f'<span class="mov-monto {signo}">{monto}</span>'
@@ -449,14 +497,22 @@ st.markdown("".join(html), unsafe_allow_html=True)
 
 st.markdown("")
 
-exportar = df[["Fecha", "Cuenta Nombre", "Desc", "CatSub", "Monto Neto", "Saldo Cierre"]].copy()
+cols_exp = ["Fecha", "Cuenta Nombre", "Desc", "CatSub", "Proyecto Nombre",
+            "Monto Neto", "Saldo Cierre"]
+cols_exp = [c for c in cols_exp if c in df.columns]
+exportar = df[cols_exp].copy()
 exportar["Fecha"] = exportar["Fecha"].dt.strftime("%d/%m/%Y")
-exportar.columns = ["Fecha", "Cuenta", "Descripción", "Categoría", "Monto", "Saldo cierre"]
+exportar.columns = [
+    {"Cuenta Nombre": "Cuenta", "Desc": "Descripción", "CatSub": "Categoría",
+     "Proyecto Nombre": "Proyecto", "Monto Neto": "Monto",
+     "Saldo Cierre": "Saldo cierre"}.get(c, c)
+    for c in cols_exp
+]
 
 csv = exportar.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
-    label="📥 Descargar extracto (CSV)",
+    label="📥 Descargar movimientos (CSV)",
     data=csv,
-    file_name=f"extracto_{cuenta_sel.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv",
+    file_name=f"movimientos_{datetime.now().strftime('%Y%m%d')}.csv",
     mime="text/csv",
 )
