@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -360,6 +361,28 @@ else:
             if isinstance(rango, tuple) and len(rango) == 2:
                 st.session_state["rango_custom"] = rango
                 desde, hasta = rango
+ 
+# Abre el calendario automáticamente al elegir "Personalizado"
+if periodo == "Personalizado" and periodo_prev != "Personalizado":
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        let intentos = 0;
+        const abrir = setInterval(() => {
+            intentos++;
+            const campo = doc.querySelector('[data-testid="stDateInput"] input');
+            if (campo) {
+                campo.focus();
+                campo.click();
+                clearInterval(abrir);
+            }
+            if (intentos > 20) clearInterval(abrir);
+        }, 100);
+        </script>
+        """,
+        height=0,
+    )
  
 # ══════════════════════════════════════════
 # SALDO ACUMULADO — sobre TODO el historial
