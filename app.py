@@ -808,7 +808,22 @@ else:
                 font=dict(size=15), showarrow=False,
             )],
         )
-        st.plotly_chart(figp, use_container_width=True)
+        evento = st.plotly_chart(
+            figp, use_container_width=True,
+            on_select="rerun", selection_mode="points", key="pie_cat",
+        )
+
+        clic = None
+        try:
+            pts = evento["selection"]["points"]
+            if pts:
+                clic = pts[0].get("label")
+        except Exception:
+            clic = None
+
+        if clic and clic != "Otros" and clic in list(por_cat.index):
+            if st.session_state.get("cat_detalle") != clic:
+                st.session_state["cat_detalle"] = clic
 
         # ── Variación vs periodo anterior ──
         if len(sel_ant) > 0 and lbl_ant:
@@ -830,64 +845,78 @@ else:
                 st.markdown("".join(filas), unsafe_allow_html=True)
 
         # ══════════════════════════════════
+        # ══════════════════════════════════
         # DETALLE POR CATEGORÍA
         # ══════════════════════════════════
 
         st.markdown('<div class="sub">Ver detalle</div>', unsafe_allow_html=True)
-        cat_det = st.selectbox(
-            "Categoría", ["— elegir —"] + list(por_cat.index),
-            label_visibility="collapsed", key="cat_detalle",
-        )
+        st.caption("Toca un sector del gráfico o elige la categoría de la lista")
+
+        opciones_det = ["— elegir —"] + list(por_cat.index)
+        if st.session_state.get("cat_detalle") not in opciones_det:
+            st.session_state["cat_detalle"] = "— elegir —"
+
+        v1, v2 = st.columns([2, 1.6])
+        with v1:
+            cat_det = st.selectbox(
+                "Categoría", opciones_det,
+                label_visibility="collapsed", key="cat_detalle",
+            )
+        with v2:
+            dim = st.radio(
+                "Ver por", ["Subcategoría", "Beneficiario"],
+                horizontal=True, label_visibility="collapsed", key="dim_detalle",
+            )
 
         if cat_det != "— elegir —":
             det = sel[sel["Cat Nombre"] == cat_det].copy()
             total_det = abs(det["Monto Neto"].sum())
-            pct_det = total_det / por_cat.sum() * 100
+            pct_det = total_det / por_cat.sum() * 100 if por_cat.sum() else 0
 
             st.markdown(
-                f'<div class="fila-orden">{len(det)} movimientos · '
+                f'<div class="fila-orden"><b>{cat_det}</b> · {len(det)} movimientos · '
                 f'S/ {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
                 unsafe_allow_html=True)
 
-            d1, d2 = st.columns(2)
+            campo = "Sub Nombre" if dim == "Subcategoría" else "Desc"
+            gr = det.groupby(campo)["Monto Neto"].sum().abs()
+            gr = gr[gr > 0].sort_values(ascending=True).tail(10)
+            gr.index = [
+                (s if s and str(s) != "nan" else "(sin dato)") for s in gr.index
+            ]
 
-            with d1:
-                sub = det.groupby("Sub Nombre")["Monto Neto"].sum().abs()
-                sub = sub[sub > 0].sort_values(ascending=False).head(6)
-                filas = ['<div class="card"><div class="card-tit">Por subcategoría</div>']
-                for s, v in sub.items():
-                    nm = s if s and s != "nan" else "(sin subcategoría)"
-                    filas.append(
-                        f'<div class="card-row"><span class="gris">{nm[:20]}</span>'
-                        f'<span>S/ {fmt0(v)}</span></div>')
-                filas.append('</div>')
-                st.markdown("".join(filas), unsafe_allow_html=True)
+            if len(gr) > 0:
+                figd = go.Figure(go.Bar(
+                    x=gr.values, y=gr.index, orientation="h",
+                    marker_color="#2a78d6",
+                    hovertemplate="S/ %{x:,.2f}<extra></extra>",
+                ))
+                figd.update_layout(
+                    height=max(180, 32 * len(gr)),
+                    margin=dict(l=0, r=0, t=6, b=0),
+                    xaxis_title="", yaxis_title="",
+                )
+                st.plotly_chart(figd, use_container_width=True)
 
-            with d2:
-                ben = det.groupby("Desc")["Monto Neto"].sum().abs()
-                ben = ben[ben > 0].sort_values(ascending=False).head(6)
-                filas = ['<div class="card"><div class="card-tit">Top beneficiarios</div>']
-                for s, v in ben.items():
-                    filas.append(
-                        f'<div class="card-row"><span class="gris">{str(s)[:20]}</span>'
-                        f'<span>S/ {fmt0(v)}</span></div>')
-                filas.append('</div>')
-                st.markdown("".join(filas), unsafe_allow_html=True)
-
-            st.markdown("")
             movs = det.sort_values("Fecha", ascending=False).head(15)
             html = []
             for _, r in movs.iterrows():
                 sg = "pos" if r["Monto Neto"] >= 0 else "neg"
                 mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
+                sb = r["Sub Nombre"] if str(r["Sub Nombre"]) not in ("nan", "") else ""
+                pie_txt = f'{r["Fecha"].strftime("%d/%m/%Y")} · {r["Cuenta Nombre"]}'
+                if sb:
+                    pie_txt += f' · {sb}'
                 html.append(
                     f'<div class="mov-row"><div class="mov-izq">'
                     f'<span class="mov-desc">{r["Desc"]}</span>'
-                    f'<span class="mov-cat">{r["Fecha"].strftime("%d/%m/%Y")} · '
-                    f'{r["Cuenta Nombre"]}</span></div>'
+                    f'<span class="mov-cat">{pie_txt}</span></div>'
                     f'<div class="mov-der"><span class="mov-monto {sg}">{mt}</span>'
                     f'</div></div>')
             st.markdown("".join(html), unsafe_allow_html=True)
+
+            if len(det) > 15:
+                st.caption(f"Mostrando 15 de {len(det)} movimientos")
 
     # ══════════════════════════════════════
     # PENDIENTES Y PROYECTOS
