@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import calendar
 import plotly.graph_objects as go
+import conciliacion
 
 # ══════════════════════════════════════════
 # CONFIGURACIÓN
@@ -271,7 +272,7 @@ with n1:
     st.markdown('<div class="titulo">📊</div>', unsafe_allow_html=True)
 with n2:
     vista = st.radio(
-        "Vista", ["Movimientos", "Resumen"],
+        "Vista", ["Movimientos", "Resumen", "Conciliación"],
         horizontal=True, label_visibility="collapsed",
     )
 
@@ -538,7 +539,7 @@ if vista == "Movimientos":
 # VISTA: RESUMEN
 # ══════════════════════════════════════════
 
-else:
+elif vista == "Resumen":
     tr1, tr2 = st.columns([3, 1.6])
     with tr1:
         st.markdown('<div class="titulo">Resumen</div>', unsafe_allow_html=True)
@@ -975,3 +976,11 @@ else:
         st.markdown(
             f'<div class="card"><div class="card-tit">📁 Proyectos activos</div>'
             f'{"".join(bloques)}</div>', unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════
+# VISTA: CONCILIACIÓN
+# ══════════════════════════════════════════
+
+if vista == "Conciliación":
+    conciliacion.render(mov, cuentas, conectar_sheets, SHEET_ID)
