@@ -9,8 +9,8 @@ Contiene 3 partes:
   2) conciliar(): cruza el EECC contra los movimientos del app.
   3) render(): dibuja la vista y el flujo completo.
 
-Por ahora el parser es específico de Diners Club. Está aislado para poder
-sumar otros bancos después sin tocar el resto.
+Parsers por banco (Diners y BCP), aislados en el registro BANCOS para
+sumar más bancos sin tocar el motor de cruce ni la vista.
 """
 import re
 from datetime import datetime, timedelta
@@ -23,8 +23,9 @@ import streamlit as st
 # 1) PARSER — DINERS CLUB
 # ══════════════════════════════════════════
 
-MESES = {'ENE': 1, 'FEB': 2, 'MAR': 3, 'ABR': 4, 'MAY': 5, 'JUN': 6,
-         'JUL': 7, 'AGO': 8, 'SET': 9, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DIC': 12}
+MESES = {'ENE': 1, 'JAN': 1, 'FEB': 2, 'MAR': 3, 'ABR': 4, 'APR': 4, 'MAY': 5,
+         'JUN': 6, 'JUL': 7, 'AGO': 8, 'AUG': 8, 'SET': 9, 'SEP': 9, 'OCT': 10,
+         'NOV': 11, 'DIC': 12, 'DEC': 12}
 X_SPLIT = 525.0  # separa columna SOLES (izq) de DOLARES (der) por coordenada x
 FECHA_RE = re.compile(r'^(\d{2})\s+([A-Z]{3})\s+(\d{2})\s+([A-Z]{3})\s+(.*)$')
 MONTO_RE = re.compile(r'^-?[\d,]+\.\d{2}$')
@@ -114,6 +115,82 @@ def _cuota_n(c):
         return None
 
 
+# ══════════════════════════════════════════
+# 1b) PARSER — BCP (Tarjeta Visa)
+# ══════════════════════════════════════════
+
+X_SPLIT_BCP = 496.0          # separa columna SOLES de DOLARES en BCP
+FECHA_TOK = re.compile(r'^(\d{2})([A-Za-z]{3})$')
+MONEY_BCP = re.compile(r'^-?[\d,]+\.\d{2}-?$')
+TIPOS_BCP = {'CONSUMO', 'PAGOSERVIC', 'PAGO'}
+AUTO_BCP = ['SEGURO DE DESGRAVAMEN', 'COMISION ANUAL POR MEMBRESIA',
+            'ENVIO FISICO', 'COMISION POR USO DE CANALES', 'INTERESES']
+
+
+def _bcp_anios(pdf):
+    """Lee el ciclo de facturación (Del / Al) para asignar el año a cada mes."""
+    txt = pdf.pages[0].extract_text() or ""
+    ds = re.findall(r'(\d{2})/(\d{2})/(\d{2})', txt)
+    if len(ds) < 2:
+        y = datetime.now().year
+        return (1, y), (12, y)
+    (_, m1, y1), (_, m2, y2) = ds[0], ds[1]
+    return (int(m1), 2000 + int(y1)), (int(m2), 2000 + int(y2))
+
+
+def parse_bcp(pdf_source, anio=None):
+    filas = []
+    with pdfplumber.open(pdf_source) as pdf:
+        (sm, sy), (em, ey) = _bcp_anios(pdf)
+        for page in pdf.pages:
+            for ws in _lineas(page):
+                toks = [w['text'] for w in ws]
+                texto = ' '.join(toks)
+                es_detalle = (len(toks) >= 2 and FECHA_TOK.match(toks[0])
+                              and FECHA_TOK.match(toks[1]))
+                if not es_detalle:
+                    # Cargos automáticos del banco (bloque resumen, sin fecha)
+                    if 'SUB TOTAL' in texto or 'MONTO TOTAL' in texto:
+                        continue
+                    for lab in AUTO_BCP:
+                        if lab in texto:
+                            m = [w for w in ws if MONEY_BCP.match(w['text'])]
+                            if m:
+                                val = float(m[-1]['text'].replace(',', '').replace('-', ''))
+                                filas.append(dict(
+                                    fecha_consumo='', fecha_proceso='',
+                                    descripcion=lab.title(), tipo='comision', cuota='',
+                                    importe_total=val, monto=val,
+                                    moneda='Soles' if m[-1]['x1'] < X_SPLIT_BCP else 'Dolares'))
+                    continue
+                # Fila de detalle: el tipo va justo antes del monto (último token)
+                monts = [w for w in ws if MONEY_BCP.match(w['text'])]
+                if not monts:
+                    continue
+                mw = monts[-1]
+                money_idx = ws.index(mw)
+                tipo_op = toks[money_idx - 1] if money_idx >= 3 else ''
+                if tipo_op not in TIPOS_BCP:
+                    continue
+                desc = ' '.join(toks[2:money_idx - 1]).strip()
+                desc = re.sub(r'\s+(PE|CA|US)$', '', desc).strip()
+                mc = FECHA_TOK.match(toks[1])
+                mon = MESES.get(mc.group(2).upper(), 0)
+                y = sy if mon == sm else ey
+                fecha = f"{int(mc.group(1)):02d}/{mon:02d}/{y}"
+                val = float(mw['text'].replace(',', '').replace('-', ''))
+                filas.append(dict(
+                    fecha_consumo=fecha, fecha_proceso='', descripcion=desc,
+                    tipo=('pago' if tipo_op == 'PAGO' else 'consumo_revolvente'),
+                    cuota='', importe_total=val, monto=val,
+                    moneda='Soles' if mw['x1'] < X_SPLIT_BCP else 'Dolares'))
+    return pd.DataFrame(filas)
+
+
+# Registro de bancos disponibles (parser por banco)
+BANCOS = {'Diners': parse_diners, 'BCP': parse_bcp}
+
+
 def conciliar(df_eecc, df_app, dias_tolerancia=5):
     e = df_eecc.copy()
     a = df_app.copy()
@@ -195,22 +272,25 @@ def _kpi(label, valor, clase=""):
 
 def render(mov, cuentas, conectar_sheets, sheet_id):
     st.markdown('<div class="titulo">Conciliación</div>', unsafe_allow_html=True)
-    st.caption("Sube el estado de cuenta de tu tarjeta Diners y crúzalo con lo registrado.")
+    st.caption("Sube el estado de cuenta de tu tarjeta y crúzalo con lo registrado.")
 
-    archivo = st.file_uploader("Estado de cuenta (PDF)", type="pdf")
+    banco = st.radio("Banco", list(BANCOS.keys()), horizontal=True)
+    archivo = st.file_uploader("Estado de cuenta (PDF)", type=["pdf"])
     if not archivo:
-        st.info("Sube un PDF de Diners para empezar.")
+        st.info(f"Sube un PDF de {banco} para empezar.")
         return
 
     col_a, col_b = st.columns([1, 1])
     with col_a:
-        anio = st.number_input("Año del periodo", min_value=2020, max_value=2100,
-                               value=datetime.now().year, step=1)
+        anio = st.number_input(
+            "Año del periodo (solo Diners)", min_value=2020, max_value=2100,
+            value=datetime.now().year, step=1,
+            help="Diners no trae el año en las fechas; BCP lo detecta solo del ciclo.")
     with col_b:
         dias = st.slider("Tolerancia de fechas (días)", 0, 15, 5)
 
     try:
-        eecc = parse_diners(archivo, anio=int(anio))
+        eecc = BANCOS[banco](archivo, anio=int(anio))
     except Exception as e:
         st.error(f"No se pudo leer el PDF: {e}")
         return
