@@ -272,7 +272,7 @@ with n1:
     st.markdown('<div class="titulo">📊</div>', unsafe_allow_html=True)
 with n2:
     vista = st.radio(
-        "Vista", ["Movimientos", "Resumen", "Conciliación"],
+        "Vista", ["Movimientos", "Reportes", "Conciliación"],
         horizontal=True, label_visibility="collapsed",
     )
 
@@ -536,15 +536,21 @@ if vista == "Movimientos":
     )
 
 # ══════════════════════════════════════════
-# VISTA: RESUMEN
+# VISTA: REPORTES
 # ══════════════════════════════════════════
 
-elif vista == "Resumen":
+elif vista == "Reportes":
     tr1, tr2 = st.columns([3, 1.6])
     with tr1:
-        st.markdown('<div class="titulo">Resumen</div>', unsafe_allow_html=True)
+        st.markdown('<div class="titulo">Reportes</div>', unsafe_allow_html=True)
     with tr2:
         solo_act_r = st.toggle("Solo activos", value=True, key="tg_resumen")
+
+    # Sub-navegación de reportes
+    rep_vista = st.radio(
+        "Reporte", ["Gráfico circular", "Gráfico evolutivo"],
+        horizontal=True, label_visibility="collapsed", key="rep_vista",
+    )
 
     # ── Listas para filtros ──
     col_act = buscar_col(cuentas, ["Activa", "Activo"])
@@ -709,215 +715,217 @@ elif vista == "Resumen":
             f'<div class="kpi-delta gris">{nota_p}</div></div>',
             unsafe_allow_html=True)
 
-    # ══════════════════════════════════════
-    # EVOLUTIVO
-    # ══════════════════════════════════════
+    if rep_vista == "Gráfico evolutivo":
+        # ══════════════════════════════════════
+        # EVOLUTIVO
+        # ══════════════════════════════════════
 
-    e1, e2 = st.columns([3, 1.4])
-    with e1:
-        st.markdown('<div class="sub">Ingresos vs egresos</div>',
-                    unsafe_allow_html=True)
-    with e2:
-        gran = st.selectbox("Ver por", ["Mensual", "Anual"],
-                            index=0 if gran_def == "Mensual" else 1,
-                            key="gran_evo", label_visibility="collapsed")
+        e1, e2 = st.columns([3, 1.4])
+        with e1:
+            st.markdown('<div class="sub">Ingresos vs egresos</div>',
+                        unsafe_allow_html=True)
+        with e2:
+            gran = st.selectbox("Ver por", ["Mensual", "Anual"],
+                                index=0 if gran_def == "Mensual" else 1,
+                                key="gran_evo", label_visibility="collapsed")
 
-    if gran == "Mensual":
-        if per_sel.startswith("Año"):
-            anio = int(per_sel.split()[1])
-            claves = [pd.Period(f"{anio}-{m:02d}", freq="M") for m in range(1, 13)]
-        elif per_sel == "Todo el historial":
-            claves = sorted(real["Periodo"].unique())[-24:]
+        if gran == "Mensual":
+            if per_sel.startswith("Año"):
+                anio = int(per_sel.split()[1])
+                claves = [pd.Period(f"{anio}-{m:02d}", freq="M") for m in range(1, 13)]
+            elif per_sel == "Todo el historial":
+                claves = sorted(real["Periodo"].unique())[-24:]
+            else:
+                fin_p = pd.Period(d_fin, freq="M")
+                claves = [fin_p - i for i in range(11, -1, -1)]
+            etq = [f"{MESES_C[p.month]} {str(p.year)[2:]}" for p in claves]
+            grupo = real["Periodo"]
         else:
-            fin_p = pd.Period(d_fin, freq="M")
-            claves = [fin_p - i for i in range(11, -1, -1)]
-        etq = [f"{MESES_C[p.month]} {str(p.year)[2:]}" for p in claves]
-        grupo = real["Periodo"]
-    else:
-        claves = sorted(real["Fecha"].dt.year.unique())
-        etq = [str(a) for a in claves]
-        grupo = real["Fecha"].dt.year
+            claves = sorted(real["Fecha"].dt.year.unique())
+            etq = [str(a) for a in claves]
+            grupo = real["Fecha"].dt.year
 
-    vi, ve, va = [], [], []
-    for k in claves:
-        d = real[grupo == k]
-        i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
-        e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
-        vi.append(i_)
-        ve.append(e_)
-        va.append(i_ - e_)
+        vi, ve, va = [], [], []
+        for k in claves:
+            d = real[grupo == k]
+            i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
+            e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
+            vi.append(i_)
+            ve.append(e_)
+            va.append(i_ - e_)
 
-    fig = go.Figure()
-    fig.add_bar(x=etq, y=vi, name="Ingresos", marker_color="#1baf7a")
-    fig.add_bar(x=etq, y=ve, name="Egresos", marker_color="#eb6834")
-    fig.add_scatter(x=etq, y=va, name="Ahorro neto", mode="lines+markers",
-                    line=dict(color="#2a78d6", width=2), marker=dict(size=5))
-    fig.update_layout(
-        barmode="group", height=270,
-        margin=dict(l=0, r=0, t=10, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        hovermode="x unified", yaxis_title="", xaxis_title="",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        fig.add_bar(x=etq, y=vi, name="Ingresos", marker_color="#1baf7a")
+        fig.add_bar(x=etq, y=ve, name="Egresos", marker_color="#eb6834")
+        fig.add_scatter(x=etq, y=va, name="Ahorro neto", mode="lines+markers",
+                        line=dict(color="#2a78d6", width=2), marker=dict(size=5))
+        fig.update_layout(
+            barmode="group", height=270,
+            margin=dict(l=0, r=0, t=10, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            hovermode="x unified", yaxis_title="", xaxis_title="",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # ══════════════════════════════════════
-    # PIE POR CATEGORÍA
-    # ══════════════════════════════════════
+    if rep_vista == "Gráfico circular":
+        # ══════════════════════════════════════
+        # PIE POR CATEGORÍA
+        # ══════════════════════════════════════
 
-    if tipo_r == "Egreso":
-        sel = act[act["Monto Neto"] < 0].copy()
-        sel_ant = ant[ant["Monto Neto"] < 0].copy()
-        titulo_pie = "Egresos por categoría"
-    else:
-        sel = act[act["Monto Neto"] > 0].copy()
-        sel_ant = ant[ant["Monto Neto"] > 0].copy()
-        titulo_pie = "Ingresos por categoría"
-
-    st.markdown(f'<div class="sub">{titulo_pie}</div>', unsafe_allow_html=True)
-
-    if len(sel) == 0:
-        st.info("No hay movimientos de este tipo en el periodo seleccionado.")
-    else:
-        por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-        por_cat = por_cat[por_cat > 0].sort_values(ascending=False)
-
-        COLORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
-                   "#008300", "#4a3aa7", "#e34948", "#888780"]
-
-        if len(por_cat) > 9:
-            top = por_cat.head(8)
-            otros = por_cat.iloc[8:].sum()
-            etiquetas_pie = list(top.index) + ["Otros"]
-            valores_pie = list(top.values) + [otros]
+        if tipo_r == "Egreso":
+            sel = act[act["Monto Neto"] < 0].copy()
+            sel_ant = ant[ant["Monto Neto"] < 0].copy()
+            titulo_pie = "Egresos por categoría"
         else:
-            etiquetas_pie = list(por_cat.index)
-            valores_pie = list(por_cat.values)
+            sel = act[act["Monto Neto"] > 0].copy()
+            sel_ant = ant[ant["Monto Neto"] > 0].copy()
+            titulo_pie = "Ingresos por categoría"
 
-        figp = go.Figure(go.Pie(
-            labels=etiquetas_pie, values=valores_pie, hole=0.45,
-            marker=dict(colors=COLORES[:len(etiquetas_pie)],
-                        line=dict(color="#ffffff", width=2)),
-            textinfo="percent", textposition="inside",
-            hovertemplate="%{label}<br>S/ %{value:,.2f} (%{percent})<extra></extra>",
-            sort=True,
-        ))
-        figp.update_layout(
-            height=340, margin=dict(l=0, r=0, t=6, b=0),
-            legend=dict(orientation="v", x=1, y=0.5, font=dict(size=11)),
-            annotations=[dict(
-                text=f"S/ {fmt0(por_cat.sum())}", x=0.5, y=0.5,
-                font=dict(size=15), showarrow=False,
-            )],
-        )
-        evento = st.plotly_chart(
-            figp, use_container_width=True,
-            on_select="rerun", selection_mode="points", key="pie_cat",
-        )
+        st.markdown(f'<div class="sub">{titulo_pie}</div>', unsafe_allow_html=True)
 
-        clic = None
-        try:
-            pts = evento["selection"]["points"]
-            if pts:
-                clic = pts[0].get("label")
-        except Exception:
+        if len(sel) == 0:
+            st.info("No hay movimientos de este tipo en el periodo seleccionado.")
+        else:
+            por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
+            por_cat = por_cat[por_cat > 0].sort_values(ascending=False)
+
+            COLORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
+                       "#008300", "#4a3aa7", "#e34948", "#888780"]
+
+            if len(por_cat) > 9:
+                top = por_cat.head(8)
+                otros = por_cat.iloc[8:].sum()
+                etiquetas_pie = list(top.index) + ["Otros"]
+                valores_pie = list(top.values) + [otros]
+            else:
+                etiquetas_pie = list(por_cat.index)
+                valores_pie = list(por_cat.values)
+
+            figp = go.Figure(go.Pie(
+                labels=etiquetas_pie, values=valores_pie, hole=0.45,
+                marker=dict(colors=COLORES[:len(etiquetas_pie)],
+                            line=dict(color="#ffffff", width=2)),
+                textinfo="percent", textposition="inside",
+                hovertemplate="%{label}<br>S/ %{value:,.2f} (%{percent})<extra></extra>",
+                sort=True,
+            ))
+            figp.update_layout(
+                height=340, margin=dict(l=0, r=0, t=6, b=0),
+                legend=dict(orientation="v", x=1, y=0.5, font=dict(size=11)),
+                annotations=[dict(
+                    text=f"S/ {fmt0(por_cat.sum())}", x=0.5, y=0.5,
+                    font=dict(size=15), showarrow=False,
+                )],
+            )
+            evento = st.plotly_chart(
+                figp, use_container_width=True,
+                on_select="rerun", selection_mode="points", key="pie_cat",
+            )
+
             clic = None
+            try:
+                pts = evento["selection"]["points"]
+                if pts:
+                    clic = pts[0].get("label")
+            except Exception:
+                clic = None
 
-        if clic and clic != "Otros" and clic in list(por_cat.index):
-            if st.session_state.get("cat_detalle") != clic:
-                st.session_state["cat_detalle"] = clic
+            if clic and clic != "Otros" and clic in list(por_cat.index):
+                if st.session_state.get("cat_detalle") != clic:
+                    st.session_state["cat_detalle"] = clic
 
-        # ── Variación vs periodo anterior ──
-        if len(sel_ant) > 0 and lbl_ant:
-            a_ = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-            b_ = sel_ant.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-            var = a_.subtract(b_, fill_value=0).sort_values(ascending=False)
-            var = var[var.abs() > 0.5].head(8)
-            if len(var) > 0:
-                st.markdown(f'<div class="sub">Variación vs {lbl_ant}</div>',
-                            unsafe_allow_html=True)
-                filas = []
-                for c, v in var.items():
-                    malo = (v > 0) if tipo_r == "Egreso" else (v < 0)
-                    cl = "neg" if malo else "pos"
-                    sg = "+" if v > 0 else "−"
-                    filas.append(
-                        f'<div class="var-row"><span>{c}</span>'
-                        f'<span class="var-monto {cl}">{sg}S/ {fmt0(abs(v))}</span></div>')
-                st.markdown("".join(filas), unsafe_allow_html=True)
+            # ── Variación vs periodo anterior ──
+            if len(sel_ant) > 0 and lbl_ant:
+                a_ = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
+                b_ = sel_ant.groupby("Cat Nombre")["Monto Neto"].sum().abs()
+                var = a_.subtract(b_, fill_value=0).sort_values(ascending=False)
+                var = var[var.abs() > 0.5].head(8)
+                if len(var) > 0:
+                    st.markdown(f'<div class="sub">Variación vs {lbl_ant}</div>',
+                                unsafe_allow_html=True)
+                    filas = []
+                    for c, v in var.items():
+                        malo = (v > 0) if tipo_r == "Egreso" else (v < 0)
+                        cl = "neg" if malo else "pos"
+                        sg = "+" if v > 0 else "−"
+                        filas.append(
+                            f'<div class="var-row"><span>{c}</span>'
+                            f'<span class="var-monto {cl}">{sg}S/ {fmt0(abs(v))}</span></div>')
+                    st.markdown("".join(filas), unsafe_allow_html=True)
 
-        # ══════════════════════════════════
-        # ══════════════════════════════════
-        # DETALLE POR CATEGORÍA
-        # ══════════════════════════════════
+            # ══════════════════════════════════
+            # ══════════════════════════════════
+            # DETALLE POR CATEGORÍA
+            # ══════════════════════════════════
 
-        st.markdown('<div class="sub">Ver detalle</div>', unsafe_allow_html=True)
-        st.caption("Toca un sector del gráfico o elige la categoría de la lista")
+            st.markdown('<div class="sub">Ver detalle</div>', unsafe_allow_html=True)
+            st.caption("Toca un sector del gráfico o elige la categoría de la lista")
 
-        opciones_det = ["— elegir —"] + list(por_cat.index)
-        if st.session_state.get("cat_detalle") not in opciones_det:
-            st.session_state["cat_detalle"] = "— elegir —"
+            opciones_det = ["— elegir —"] + list(por_cat.index)
+            if st.session_state.get("cat_detalle") not in opciones_det:
+                st.session_state["cat_detalle"] = "— elegir —"
 
-        v1, v2 = st.columns([2, 1.6])
-        with v1:
-            cat_det = st.selectbox(
-                "Categoría", opciones_det,
-                label_visibility="collapsed", key="cat_detalle",
-            )
-        with v2:
-            dim = st.radio(
-                "Ver por", ["Subcategoría", "Beneficiario"],
-                horizontal=True, label_visibility="collapsed", key="dim_detalle",
-            )
-
-        if cat_det != "— elegir —":
-            det = sel[sel["Cat Nombre"] == cat_det].copy()
-            total_det = abs(det["Monto Neto"].sum())
-            pct_det = total_det / por_cat.sum() * 100 if por_cat.sum() else 0
-
-            st.markdown(
-                f'<div class="fila-orden"><b>{cat_det}</b> · {len(det)} movimientos · '
-                f'S/ {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
-                unsafe_allow_html=True)
-
-            campo = "Sub Nombre" if dim == "Subcategoría" else "Desc"
-            gr = det.groupby(campo)["Monto Neto"].sum().abs()
-            gr = gr[gr > 0].sort_values(ascending=True).tail(10)
-            gr.index = [
-                (s if s and str(s) != "nan" else "(sin dato)") for s in gr.index
-            ]
-
-            if len(gr) > 0:
-                figd = go.Figure(go.Bar(
-                    x=gr.values, y=gr.index, orientation="h",
-                    marker_color="#2a78d6",
-                    hovertemplate="S/ %{x:,.2f}<extra></extra>",
-                ))
-                figd.update_layout(
-                    height=max(180, 32 * len(gr)),
-                    margin=dict(l=0, r=0, t=6, b=0),
-                    xaxis_title="", yaxis_title="",
+            v1, v2 = st.columns([2, 1.6])
+            with v1:
+                cat_det = st.selectbox(
+                    "Categoría", opciones_det,
+                    label_visibility="collapsed", key="cat_detalle",
                 )
-                st.plotly_chart(figd, use_container_width=True)
+            with v2:
+                dim = st.radio(
+                    "Ver por", ["Subcategoría", "Beneficiario", "Movimientos"],
+                    horizontal=True, label_visibility="collapsed", key="dim_detalle",
+                )
 
-            movs = det.sort_values("Fecha", ascending=False).head(15)
-            html = []
-            for _, r in movs.iterrows():
-                sg = "pos" if r["Monto Neto"] >= 0 else "neg"
-                mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
-                sb = r["Sub Nombre"] if str(r["Sub Nombre"]) not in ("nan", "") else ""
-                pie_txt = f'{r["Fecha"].strftime("%d/%m/%Y")} · {r["Cuenta Nombre"]}'
-                if sb:
-                    pie_txt += f' · {sb}'
-                html.append(
-                    f'<div class="mov-row"><div class="mov-izq">'
-                    f'<span class="mov-desc">{r["Desc"]}</span>'
-                    f'<span class="mov-cat">{pie_txt}</span></div>'
-                    f'<div class="mov-der"><span class="mov-monto {sg}">{mt}</span>'
-                    f'</div></div>')
-            st.markdown("".join(html), unsafe_allow_html=True)
+            if cat_det != "— elegir —":
+                det = sel[sel["Cat Nombre"] == cat_det].copy()
+                total_det = abs(det["Monto Neto"].sum())
+                pct_det = total_det / por_cat.sum() * 100 if por_cat.sum() else 0
 
-            if len(det) > 15:
-                st.caption(f"Mostrando 15 de {len(det)} movimientos")
+                st.markdown(
+                    f'<div class="fila-orden"><b>{cat_det}</b> · {len(det)} movimientos · '
+                    f'S/ {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
+                    unsafe_allow_html=True)
+                if dim in ("Subcategoría", "Beneficiario"):
+                    campo = "Sub Nombre" if dim == "Subcategoría" else "Desc"
+                    gr = det.groupby(campo)["Monto Neto"].sum().abs()
+                    gr = gr[gr > 0].sort_values(ascending=True).tail(10)
+                    gr.index = [
+                        (s if s and str(s) != "nan" else "(sin dato)") for s in gr.index
+                    ]
+
+                    if len(gr) > 0:
+                        figd = go.Figure(go.Bar(
+                            x=gr.values, y=gr.index, orientation="h",
+                            marker_color="#2a78d6",
+                            hovertemplate="S/ %{x:,.2f}<extra></extra>",
+                        ))
+                        figd.update_layout(
+                            height=max(180, 32 * len(gr)),
+                            margin=dict(l=0, r=0, t=6, b=0),
+                            xaxis_title="", yaxis_title="",
+                        )
+                        st.plotly_chart(figd, use_container_width=True)
+                else:
+                    movs = det.sort_values("Fecha", ascending=False).head(15)
+                    html = []
+                    for _, r in movs.iterrows():
+                        sg = "pos" if r["Monto Neto"] >= 0 else "neg"
+                        mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
+                        sb = r["Sub Nombre"] if str(r["Sub Nombre"]) not in ("nan", "") else ""
+                        pie_txt = f'{r["Fecha"].strftime("%d/%m/%Y")} · {r["Cuenta Nombre"]}'
+                        if sb:
+                            pie_txt += f' · {sb}'
+                        html.append(
+                            f'<div class="mov-row"><div class="mov-izq">'
+                            f'<span class="mov-desc">{r["Desc"]}</span>'
+                            f'<span class="mov-cat">{pie_txt}</span></div>'
+                            f'<div class="mov-der"><span class="mov-monto {sg}">{mt}</span>'
+                            f'</div></div>')
+                    st.markdown("".join(html), unsafe_allow_html=True)
+
+                    if len(det) > 15:
+                        st.caption(f"Mostrando 15 de {len(det)} movimientos")
 
     # ══════════════════════════════════════
     # PENDIENTES Y PROYECTOS
