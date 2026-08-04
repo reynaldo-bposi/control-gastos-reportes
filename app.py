@@ -32,15 +32,17 @@ div[data-testid="stColumn"] label{font-size:11px !important;}
 div[data-baseweb="select"] > div{font-size:13px;}
 
 /* ── Menú principal como pestañas ── */
-.st-key-nav_main div[role="radiogroup"]{flex-direction:row;gap:4px;
-  border-bottom:2px solid #e9ecef;}
-.st-key-nav_main div[role="radiogroup"] > label{margin:0 !important;
-  padding:9px 20px;margin-bottom:-2px !important;
-  border-bottom:3px solid transparent;color:#1baf7a;
-  font-size:16px !important;font-weight:600;cursor:pointer;}
-.st-key-nav_main div[role="radiogroup"] > label:hover{color:#148f63;}
-.st-key-nav_main div[role="radiogroup"] > label > div:first-child{display:none;}
-.st-key-nav_main div[role="radiogroup"] > label:has(input:checked){
+.st-key-nav_main div[role="radiogroup"]{flex-direction:row;flex-wrap:nowrap;
+  gap:2px;width:100%;border-bottom:2px solid #e9ecef;}
+.st-key-nav_main div[role="radiogroup"] label{flex:1;justify-content:center;
+  text-align:center;margin:0 !important;padding:10px 4px;
+  margin-bottom:-2px !important;border-bottom:3px solid transparent;
+  color:#1baf7a;font-size:15px !important;font-weight:600;
+  cursor:pointer;white-space:nowrap;}
+.st-key-nav_main div[role="radiogroup"] label:hover{color:#148f63;}
+.st-key-nav_main div[role="radiogroup"] label > div:first-child,
+.st-key-nav_main div[role="radiogroup"] label input{display:none !important;}
+.st-key-nav_main div[role="radiogroup"] label:has(input:checked){
   color:#212529;border-bottom-color:#2a78d6;}
 
 .titulo{font-size:22px;font-weight:700;line-height:1.4;padding:2px 0 10px 0;}
@@ -279,14 +281,10 @@ hoy = datetime.now().date()
 # NAVEGACIÓN
 # ══════════════════════════════════════════
 
-n1, n2 = st.columns([1, 3])
-with n1:
-    st.markdown('<div class="titulo">📊</div>', unsafe_allow_html=True)
-with n2:
-    vista = st.radio(
-        "Vista", ["Movimientos", "Reportes", "Conciliación"],
-        horizontal=True, label_visibility="collapsed", key="nav_main",
-    )
+vista = st.radio(
+    "Vista", ["Movimientos", "Reportes", "Conciliación"],
+    horizontal=True, label_visibility="collapsed", key="nav_main",
+)
 
 # ══════════════════════════════════════════
 # VISTA: MOVIMIENTOS
