@@ -40,8 +40,10 @@ div[data-baseweb="select"] > div{font-size:13px;}
   color:#1baf7a;font-size:15px !important;font-weight:600;
   cursor:pointer;white-space:nowrap;}
 .st-key-nav_main div[role="radiogroup"] label:hover{color:#148f63;}
-.st-key-nav_main div[role="radiogroup"] label > div:first-child,
-.st-key-nav_main div[role="radiogroup"] label input{display:none !important;}
+.st-key-nav_main div[role="radiogroup"] label > div:has(input),
+.st-key-nav_main div[role="radiogroup"] label input,
+.st-key-nav_main div[role="radiogroup"] label svg{
+  display:none !important;width:0 !important;height:0 !important;}
 .st-key-nav_main div[role="radiogroup"] label:has(input:checked){
   color:#212529;border-bottom-color:#2a78d6;}
 
