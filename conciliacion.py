@@ -13,7 +13,9 @@ Parsers por banco (Diners y BCP), aislados en el registro BANCOS para
 sumar más bancos sin tocar el motor de cruce ni la vista.
 """
 import re
+import html as _html
 from datetime import datetime, timedelta
+from itertools import combinations
 
 import pandas as pd
 import pdfplumber
@@ -205,7 +207,8 @@ def conciliar(df_eecc, df_app, dias_tolerancia=5):
         lambda r: r['importe_total'] if r['tipo'] == 'consumo_cuota' else r['monto'],
         axis=1)
 
-    usados, conciliados, falta = set(), [], []
+    # ── Pasada 1: cruce directo 1 a 1 (monto exacto + cuenta + fecha) ──
+    usados, conciliados, pendientes = set(), [], []
     for _, r in e.iterrows():
         cand = a[(~a.index.isin(usados)) &
                  (a['cuenta_app'] == r['cuenta_app']) &
@@ -219,7 +222,44 @@ def conciliar(df_eecc, df_app, dias_tolerancia=5):
             conciliados.append(dict(
                 fecha=r['fecha_consumo'], comercio=r['descripcion'],
                 monto=r['monto_match'], cuenta_app=r['cuenta_app'],
-                registro_app=m['beneficiario'], fecha_app=m['fecha']))
+                registro_app=m['beneficiario'], fecha_app=m['fecha'],
+                match='directo', partes=None))
+        else:
+            pendientes.append(r)
+
+    # ── Pasada 2: compra dividida (misma cuenta + fecha + beneficiario, suma 2-3) ──
+    falta = []
+    for r in pendientes:
+        libres = a[(~a.index.isin(usados)) & (a['cuenta_app'] == r['cuenta_app'])].copy()
+        libres = libres[(libres['f'] - r['f']).abs().dt.days <= dias_tolerancia]
+        hallado = None
+        if not libres.empty:
+            for (fch, ben), grupo in libres.groupby([libres['f'].dt.date, 'beneficiario']):
+                if len(grupo) < 2:
+                    continue
+                idxs = list(grupo.index)
+                for k in (2, 3):
+                    for combo in combinations(idxs, k):
+                        if abs(a.loc[list(combo), 'monto'].sum() - r['monto_match']) < 0.01:
+                            hallado = (list(combo), ben, fch)
+                            break
+                    if hallado:
+                        break
+                if hallado:
+                    break
+        if hallado:
+            combo, ben, fch = hallado
+            usados.update(combo)
+            partes = [dict(
+                fecha=a.loc[i, 'fecha'],
+                beneficiario=a.loc[i, 'beneficiario'],
+                categoria=(a.loc[i, 'categoria'] if 'categoria' in a.columns else ''),
+                monto=float(a.loc[i, 'monto'])) for i in combo]
+            conciliados.append(dict(
+                fecha=r['fecha_consumo'], comercio=r['descripcion'],
+                monto=r['monto_match'], cuenta_app=r['cuenta_app'],
+                registro_app=ben, fecha_app=str(fch),
+                match='dividido', partes=partes))
         else:
             falta.append(dict(
                 fecha=r['fecha_consumo'], descripcion=r['descripcion'],
@@ -270,9 +310,132 @@ def _kpi(label, valor, clase=""):
             f'<div class="kpi-val {clase}">{valor}</div></div>')
 
 
+def _col(df, cands):
+    low = {str(c).strip().lower(): c for c in df.columns}
+    for c in cands:
+        if c in df.columns:
+            return c
+        if c.lower() in low:
+            return low[c.lower()]
+    return None
+
+
+def _es_activa(v):
+    return str(v).strip().lower() in (
+        "sí", "si", "true", "1", "x", "yes", "verdadero", "activo", "activa", "vigente")
+
+
+def _cuentas_por_moneda(cuentas, solo_activas):
+    """Opciones (soles, dolares) ordenadas por 'Orden', activas primero.
+    Una cuenta marcada dólar solo va al filtro de dólares; una de soles solo a soles;
+    si la moneda no es clara, aparece en ambos filtros."""
+    col_nom = _col(cuentas, ["Nombre Cuenta", "Nombre"])
+    col_mon = _col(cuentas, ["Moneda"])
+    col_ord = _col(cuentas, ["Orden"])
+    col_act = _col(cuentas, ["Activa", "Activo"])
+
+    c = cuentas.copy()
+    c["_nom"] = c[col_nom].astype(str).str.strip()
+    c = c[c["_nom"] != ""]
+    c["_ord"] = pd.to_numeric(c[col_ord], errors="coerce").fillna(9999) if col_ord else 9999
+    c["_act"] = c[col_act].map(_es_activa) if col_act else True
+
+    def _cur(row):
+        blob = ((str(row[col_mon]) if col_mon else "") + " " + row["_nom"]).lower()
+        if any(k in blob for k in ("dolar", "dólar", "usd", "us$")):
+            return "D"
+        if any(k in blob for k in ("sol", "pen", "s/")):
+            return "S"
+        return "?"
+    c["_cur"] = c.apply(_cur, axis=1)
+
+    if solo_activas:
+        c = c[c["_act"]]
+    c = c.sort_values(["_act", "_ord", "_nom"], ascending=[False, True, True])
+
+    todas = c["_nom"].tolist()
+    soles = c[c["_cur"].isin(["S", "?"])]["_nom"].tolist() or todas
+    dolar = c[c["_cur"].isin(["D", "?"])]["_nom"].tolist() or todas
+    return soles, dolar
+
+
+def _fmt(n):
+    try:
+        return f"{float(n):,.2f}"
+    except Exception:
+        return str(n)
+
+
+def _tabla_conciliados(conc):
+    """Tabla única de conciliados; las filas divididas (2-3 registros del app)
+    se muestran con un desplegable que abre el detalle de sus partes."""
+    esc = _html.escape
+    cols = "0.85fr 2fr 0.8fr 1.3fr 1.9fr 1.05fr"
+    css = f"""<style>
+.ctab{{font-size:13px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;margin-top:4px}}
+.ctab .hd,.ctab .rw,.ctab summary{{display:grid;grid-template-columns:{cols};
+  gap:8px;padding:8px 12px;align-items:center}}
+.ctab .hd{{background:#f3f4f6;font-weight:600;color:#374151}}
+.ctab .rw,.ctab details{{border-top:1px solid #eee}}
+.ctab summary{{cursor:pointer;list-style:none}}
+.ctab summary::-webkit-details-marker{{display:none}}
+.ctab summary:hover{{background:#f9fafb}}
+.ctab .mono{{text-align:right;font-variant-numeric:tabular-nums}}
+.ctab .det{{background:#fafafa;padding:2px 12px 10px 34px}}
+.ctab .drow{{display:grid;grid-template-columns:0.9fr 2fr 1.6fr 0.9fr;gap:8px;
+  padding:5px 0;border-top:1px dashed #e5e7eb;color:#4b5563;font-size:12px}}
+.ctab .dh{{font-weight:600;color:#6b7280}}
+.ctab .ct{{display:inline-block;transition:transform .12s;color:#6366f1;font-size:11px}}
+.ctab details[open] .ct{{transform:rotate(90deg)}}
+.bdg{{border-radius:6px;padding:1px 8px;font-size:11px;font-weight:600;white-space:nowrap}}
+.bdg-x{{background:#e8f7f0;color:#0f7a52}}
+.bdg-d{{background:#eef2ff;color:#3730a3}}
+.tw{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+</style>"""
+    h = [css, '<div class="ctab">',
+         '<div class="hd"><div>Fecha EECC</div><div>Comercio</div>'
+         '<div class="mono">Monto</div><div>Cuenta</div>'
+         '<div>Registro en app</div><div>Cruce</div></div>']
+    for _, row in conc.iterrows():
+        partes = row.get('partes')
+        f, com = esc(str(row['fecha'])), esc(str(row['comercio']))
+        mo, cta = _fmt(row['monto']), esc(str(row['cuenta_app']))
+        reg = esc(str(row['registro_app']))
+        if isinstance(partes, list) and len(partes) >= 2:
+            bdg = f'<span class="bdg bdg-d">dividido ({len(partes)})</span>'
+            det = ['<div class="det">',
+                   '<div class="drow dh"><div>Fecha</div><div>Beneficiario</div>'
+                   '<div>Categoría</div><div class="mono">Monto</div></div>']
+            for p in partes:
+                det.append(
+                    f'<div class="drow"><div>{esc(str(p["fecha"]))}</div>'
+                    f'<div class="tw">{esc(str(p["beneficiario"]))}</div>'
+                    f'<div class="tw">{esc(str(p.get("categoria", "")))}</div>'
+                    f'<div class="mono">{_fmt(p["monto"])}</div></div>')
+            det.append('</div>')
+            h.append(
+                f'<details><summary><div>{f}</div><div class="tw">{com}</div>'
+                f'<div class="mono">{mo}</div><div class="tw">{cta}</div>'
+                f'<div class="tw"><span class="ct">▸</span> {reg}</div>'
+                f'<div>{bdg}</div></summary>' + ''.join(det) + '</details>')
+        else:
+            h.append(
+                f'<div class="rw"><div>{f}</div><div class="tw">{com}</div>'
+                f'<div class="mono">{mo}</div><div class="tw">{cta}</div>'
+                f'<div class="tw">{reg}</div>'
+                f'<div><span class="bdg bdg-x">directo</span></div></div>')
+    h.append('</div>')
+    return ''.join(h)
+
+
 def render(mov, cuentas, conectar_sheets, sheet_id):
     st.markdown('<div class="titulo">Conciliación</div>', unsafe_allow_html=True)
     st.caption("Sube el estado de cuenta de tu tarjeta y crúzalo con lo registrado.")
+    st.markdown("""<style>
+.st-key-btn_conciliar button{background:#1baf7a !important;color:#fff !important;
+  border:none !important;font-weight:700;width:100%;}
+.st-key-btn_conciliar button:hover{background:#148f63 !important;color:#fff !important;}
+</style>""", unsafe_allow_html=True)
 
     banco = st.radio("Banco", list(BANCOS.keys()), horizontal=True)
     archivo = st.file_uploader("Estado de cuenta (PDF)", type=["pdf"])
@@ -308,29 +471,27 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
     c3.markdown(_kpi("Pagos (excluidos)", n_pago, "gris"), unsafe_allow_html=True)
 
     # Mapeo columna del EECC -> cuenta del app
-    nombres_cta = [str(n).strip() for n in cuentas["Nombre Cuenta"]
-                   if str(n).strip()]
-
-    def _guess(keys):
-        for n in nombres_cta:
-            low = n.lower()
-            if all(k in low for k in keys):
-                return n
-        return nombres_cta[0] if nombres_cta else ""
-
     st.markdown('<div class="sub">¿A qué cuenta va cada columna?</div>',
                 unsafe_allow_html=True)
+    solo_act = st.toggle("Solo cuentas activas", value=True, key="conc_solo_act")
+    op_soles, op_dolar = _cuentas_por_moneda(cuentas, solo_act)
+    if not op_soles and not op_dolar:
+        st.warning("No hay cuentas disponibles con ese filtro.")
+        return
+
+    def _idx(opciones):
+        for i, o in enumerate(opciones):
+            if banco.lower() in o.lower():
+                return i
+        return 0
+
     m1, m2 = st.columns(2)
     with m1:
-        cta_soles = st.selectbox(
-            "Consumos en SOLES", nombres_cta,
-            index=nombres_cta.index(_guess(['diners', 'sol'])) if _guess(['diners', 'sol']) in nombres_cta else 0)
+        cta_soles = st.selectbox("Consumos en SOLES", op_soles, index=_idx(op_soles))
     with m2:
-        cta_dolar = st.selectbox(
-            "Consumos en DÓLARES", nombres_cta,
-            index=nombres_cta.index(_guess(['diners', 'ól'])) if _guess(['diners', 'ól']) in nombres_cta else 0)
+        cta_dolar = st.selectbox("Consumos en DÓLARES", op_dolar, index=_idx(op_dolar))
 
-    if st.button("Conciliar", type="primary"):
+    if st.button("🔍 Conciliar", type="primary", key="btn_conciliar"):
         # EECC -> asignar cuenta segun moneda
         eecc = eecc.copy()
         eecc['cuenta_app'] = eecc['moneda'].map(
@@ -350,6 +511,8 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
             'monto': pd.to_numeric(a["Monto"], errors='coerce').fillna(0),
             'cuenta_app': a["Cuenta Nombre"],
             'beneficiario': a["Desc"] if "Desc" in a.columns else a["Cuenta Nombre"],
+            'categoria': (a["Cat Nombre"] if "Cat Nombre" in a.columns
+                          else (a["Sub Nombre"] if "Sub Nombre" in a.columns else "")),
         }).reset_index(drop=True)
 
         st.session_state['conc_res'] = conciliar(eecc, df_app, dias_tolerancia=int(dias))
@@ -417,9 +580,9 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
 
     # Conciliados
     if not conc.empty:
-        with st.expander(f"✅ Conciliados ({len(conc)})"):
-            st.dataframe(conc.rename(columns={
-                'fecha': 'Fecha EECC', 'comercio': 'Comercio', 'monto': 'Monto',
-                'cuenta_app': 'Cuenta', 'registro_app': 'Registro en app',
-                'fecha_app': 'Fecha app'}),
-                use_container_width=True, hide_index=True)
+        n_div = int((conc['match'] == 'dividido').sum()) if 'match' in conc else 0
+        etiqueta = f"✅ Conciliados ({len(conc)})"
+        if n_div:
+            etiqueta += f" · {n_div} de compras divididas"
+        with st.expander(etiqueta):
+            st.markdown(_tabla_conciliados(conc), unsafe_allow_html=True)
