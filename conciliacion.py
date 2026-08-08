@@ -227,34 +227,51 @@ def conciliar(df_eecc, df_app, dias_tolerancia=5):
         else:
             pendientes.append(r)
 
-    # ── Pasada 2: compra dividida (misma cuenta + fecha + beneficiario, suma 2-3) ──
+    # ── Pasada 2: consumo dividido en el app (misma cuenta + fecha) ──
+    # Acepta una combinación de 2-3 registros cuya suma == línea del EECC cuando:
+    #   (a) comparten beneficiario  → compra partida en varias categorías, o
+    #   (b) incluye una transferencia de salida → consumo cuyo excedente se
+    #       transfiere a otra cuenta (ej. "Transferir a Sueldo BCP", reembolso).
     falta = []
     for r in pendientes:
         libres = a[(~a.index.isin(usados)) & (a['cuenta_app'] == r['cuenta_app'])].copy()
         libres = libres[(libres['f'] - r['f']).abs().dt.days <= dias_tolerancia]
         hallado = None
         if not libres.empty:
-            for (fch, ben), grupo in libres.groupby([libres['f'].dt.date, 'beneficiario']):
+            for fch, grupo in libres.groupby(libres['f'].dt.date):
                 if len(grupo) < 2:
                     continue
                 idxs = list(grupo.index)
+                if len(idxs) > 15:
+                    idxs = idxs[:15]
                 for k in (2, 3):
                     for combo in combinations(idxs, k):
-                        if abs(a.loc[list(combo), 'monto'].sum() - r['monto_match']) < 0.01:
-                            hallado = (list(combo), ben, fch)
+                        sub = a.loc[list(combo)]
+                        if abs(sub['monto'].sum() - r['monto_match']) >= 0.01:
+                            continue
+                        mismo_benef = sub['beneficiario'].nunique() == 1
+                        tiene_transfer = bool(sub['es_transfer'].any()) \
+                            if 'es_transfer' in sub.columns else False
+                        if mismo_benef or tiene_transfer:
+                            hallado = (list(combo), fch)
                             break
                     if hallado:
                         break
                 if hallado:
                     break
         if hallado:
-            combo, ben, fch = hallado
+            combo, fch = hallado
             usados.update(combo)
             partes = [dict(
                 fecha=a.loc[i, 'fecha'],
                 beneficiario=a.loc[i, 'beneficiario'],
                 categoria=(a.loc[i, 'categoria'] if 'categoria' in a.columns else ''),
-                monto=float(a.loc[i, 'monto'])) for i in combo]
+                monto=float(a.loc[i, 'monto']),
+                es_transfer=bool(a.loc[i, 'es_transfer']) if 'es_transfer' in a.columns else False)
+                for i in combo]
+            # nombre representativo: el del consumo real, no el de la transferencia
+            no_tr = [p for p in partes if not p['es_transfer']]
+            ben = no_tr[0]['beneficiario'] if no_tr else partes[0]['beneficiario']
             conciliados.append(dict(
                 fecha=r['fecha_consumo'], comercio=r['descripcion'],
                 monto=r['monto_match'], cuenta_app=r['cuenta_app'],
@@ -407,10 +424,13 @@ def _tabla_conciliados(conc):
                    '<div class="drow dh"><div>Fecha</div><div>Beneficiario</div>'
                    '<div>Categoría</div><div class="mono">Monto</div></div>']
             for p in partes:
+                es_tr = bool(p.get("es_transfer"))
+                ben_p = ("↩ " if es_tr else "") + str(p["beneficiario"])
+                cat_p = str(p.get("categoria", "") or ("Transferencia (reembolso)" if es_tr else ""))
                 det.append(
                     f'<div class="drow"><div>{esc(str(p["fecha"]))}</div>'
-                    f'<div class="tw">{esc(str(p["beneficiario"]))}</div>'
-                    f'<div class="tw">{esc(str(p.get("categoria", "")))}</div>'
+                    f'<div class="tw">{esc(ben_p)}</div>'
+                    f'<div class="tw">{esc(cat_p)}</div>'
                     f'<div class="mono">{_fmt(p["monto"])}</div></div>')
             det.append('</div>')
             h.append(
@@ -497,13 +517,18 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
         eecc['cuenta_app'] = eecc['moneda'].map(
             {'Soles': cta_soles, 'Dolares': cta_dolar})
 
-        # Movimientos del app: Egresos de esas 2 cuentas dentro del periodo
+        # Movimientos del app en esas 2 cuentas dentro del periodo.
+        # Incluimos SALIDAS de la tarjeta (Monto Neto < 0): consumos (Egreso) y
+        # transferencias de salida como "Transferir a Sueldo BCP" (parte reembolsada
+        # de un consumo). Se excluyen los pagos a la tarjeta (Monto Neto > 0).
         fechas = pd.to_datetime(eecc['fecha_consumo'], dayfirst=True, errors='coerce')
         fmin, fmax = fechas.min().date(), fechas.max().date()
         td = timedelta(days=int(dias))
 
+        neto = pd.to_numeric(mov["Monto Neto"], errors='coerce') if "Monto Neto" in mov.columns \
+            else -pd.to_numeric(mov["Monto"], errors='coerce')
         a = mov[(mov["Cuenta Nombre"].isin([cta_soles, cta_dolar])) &
-                (mov["Tipo"] == "Egreso") &
+                (neto < 0) &
                 (mov["Fecha"].dt.date >= fmin - td) &
                 (mov["Fecha"].dt.date <= fmax + td)].copy()
         df_app = pd.DataFrame({
@@ -513,6 +538,8 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
             'beneficiario': a["Desc"] if "Desc" in a.columns else a["Cuenta Nombre"],
             'categoria': (a["Cat Nombre"] if "Cat Nombre" in a.columns
                           else (a["Sub Nombre"] if "Sub Nombre" in a.columns else "")),
+            'es_transfer': (a["Tipo"].astype(str).str.strip() == "Transferencia")
+                           if "Tipo" in a.columns else False,
         }).reset_index(drop=True)
 
         st.session_state['conc_res'] = conciliar(eecc, df_app, dias_tolerancia=int(dias))
