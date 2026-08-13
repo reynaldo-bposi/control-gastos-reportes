@@ -593,8 +593,25 @@ elif vista == "Reportes":
             opc_proy += sorted([n for n in pr[c_nom].astype(str).str.strip().unique() if n])
 
     anios = sorted(mov["Fecha"].dt.year.unique(), reverse=True)
-    opc_periodo = ["Este mes", "Mes anterior"] + [f"Año {a}" for a in anios] + \
-                  ["Todo el historial"]
+
+    # Meses completos recientes (dinámicos) para filtrar rápido; se saltan
+    # los 2 primeros porque ya están como "Este mes" / "Mes anterior".
+    fmin_mes = fecha_min.replace(day=1)
+    map_meses, _y, _m, _c = {}, hoy.year, hoy.month, 0
+    for _i in range(30):
+        _d0 = datetime(_y, _m, 1).date()
+        if _i >= 2 and _d0 >= fmin_mes and _c < 12:
+            map_meses[f"{MESES[_m].capitalize()} {_y}"] = (_y, _m)
+            _c += 1
+        _m -= 1
+        if _m == 0:
+            _m, _y = 12, _y - 1
+
+    opc_periodo = (["Este mes", "Mes anterior",
+                    "Últimos 30 días", "Últimos 60 días", "Últimos 90 días"]
+                   + list(map_meses.keys())
+                   + [f"Año {a}" for a in anios]
+                   + ["Todo el historial", "Personalizado"])
 
     # ── Filtros ──
     q1, q2 = st.columns(2)
@@ -610,6 +627,14 @@ elif vista == "Reportes":
     with q4:
         tipo_r = st.selectbox("Tipo", ["Egreso", "Ingreso"], key="tipo_resumen")
 
+    if per_sel == "Personalizado":
+        _g = st.session_state.get("rango_rep", (hoy - timedelta(days=30), hoy))
+        _rango = st.date_input("Rango de fechas", value=_g,
+                               min_value=fecha_min, max_value=fecha_max,
+                               format="DD/MM/YYYY", key="cal_rep")
+        if isinstance(_rango, tuple) and len(_rango) == 2:
+            st.session_state["rango_rep"] = _rango
+
     if cta_r.startswith("──"):
         cta_r = "Todas"
 
@@ -618,24 +643,54 @@ elif vista == "Reportes":
     fin_ant = pri_mes - timedelta(days=1)
     ini_ant = fin_ant.replace(day=1)
 
+    def _rango_mes(y, m):
+        ini = datetime(y, m, 1).date()
+        fin = datetime(y, m, calendar.monthrange(y, m)[1]).date()
+        if y == hoy.year and m == hoy.month:
+            fin = hoy
+        return ini, fin
+
+    es_mes_curso = False
     if per_sel == "Este mes":
         d_ini, d_fin = pri_mes, hoy
         a_ini, a_fin = ini_ant, fin_ant
         lbl_ant = MESES_C[ini_ant.month]
         gran_def = "Mensual"
+        es_mes_curso = True
     elif per_sel == "Mes anterior":
         d_ini, d_fin = ini_ant, fin_ant
         prev_fin = ini_ant - timedelta(days=1)
         a_ini, a_fin = prev_fin.replace(day=1), prev_fin
         lbl_ant = MESES_C[a_ini.month]
         gran_def = "Mensual"
+    elif per_sel in ("Últimos 30 días", "Últimos 60 días", "Últimos 90 días"):
+        ndias = int(per_sel.split()[1])
+        d_ini, d_fin = hoy - timedelta(days=ndias), hoy
+        a_fin = d_ini - timedelta(days=1)
+        a_ini = a_fin - timedelta(days=ndias)
+        lbl_ant = f"{ndias}d previos"
+        gran_def = "Mensual"
+    elif per_sel in map_meses:
+        y, m = map_meses[per_sel]
+        d_ini, d_fin = _rango_mes(y, m)
+        pm = datetime(y, m, 1).date() - timedelta(days=1)
+        a_ini, a_fin = pm.replace(day=1), pm
+        lbl_ant = MESES_C[pm.month]
+        gran_def = "Mensual"
+        es_mes_curso = (y == hoy.year and m == hoy.month)
     elif per_sel.startswith("Año"):
         anio = int(per_sel.split()[1])
         d_ini, d_fin = datetime(anio, 1, 1).date(), datetime(anio, 12, 31).date()
         a_ini, a_fin = datetime(anio - 1, 1, 1).date(), datetime(anio - 1, 12, 31).date()
         lbl_ant = str(anio - 1)
         gran_def = "Mensual"
-    else:
+    elif per_sel == "Personalizado":
+        g = st.session_state.get("rango_rep", (hoy - timedelta(days=30), hoy))
+        d_ini, d_fin = g[0], g[1]
+        a_ini, a_fin = None, None
+        lbl_ant = ""
+        gran_def = "Anual" if (d_fin - d_ini).days > 366 else "Mensual"
+    else:  # Todo el historial
         d_ini, d_fin = fecha_min, fecha_max
         a_ini, a_fin = None, None
         lbl_ant = ""
@@ -678,7 +733,7 @@ elif vista == "Reportes":
                 f'vs {lbl_ant}</div>')
 
     # ── Proyección ──
-    if per_sel == "Este mes":
+    if es_mes_curso:
         dias_mes = calendar.monthrange(hoy.year, hoy.month)[1]
         proy_val = egr / hoy.day * dias_mes if hoy.day else egr
         nota_p = "al cierre del mes"
@@ -690,32 +745,116 @@ elif vista == "Reportes":
         proy_val = egr
         nota_p = "periodo cerrado"
 
-    k1, k2 = st.columns(2)
-    with k1:
-        st.markdown(
-            f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
-            f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>{delta(ing, ing_a)}</div>',
-            unsafe_allow_html=True)
-    with k2:
-        st.markdown(
-            f'<div class="kpi"><div class="kpi-label">Egresos</div>'
-            f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
-            f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
+    # ── Cross-filter: categoría activa al hacer clic en el gráfico circular ──
+    # Se procesa el clic ANTES de los KPIs para que el filtro aplique al instante.
+    # Detección por cambio (pie_last) para que "Quitar" no se re-active con la
+    # selección que el gráfico mantiene guardada.
+    st.session_state.setdefault("pie_last", None)
+    if rep_vista == "Gráfico circular":
+        _ev = st.session_state.get("pie_cat")
+        _lbl = None
+        try:
+            _pts = _ev["selection"]["points"]
+            if _pts:
+                _lbl = _pts[0].get("label")
+        except Exception:
+            _lbl = None
+        if _lbl and _lbl != st.session_state.get("pie_last"):
+            st.session_state["pie_last"] = _lbl
+            if _lbl != "Otros":
+                st.session_state["cat_detalle"] = _lbl
 
-    k3, k4 = st.columns(2)
-    with k3:
-        cl = "pos" if ahorro >= 0 else "neg"
-        st.markdown(
-            f'<div class="kpi"><div class="kpi-label">Ahorro neto</div>'
-            f'<div class="kpi-val {cl}">S/ {fmt0(ahorro)}</div>'
-            f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
-            unsafe_allow_html=True)
-    with k4:
-        st.markdown(
-            f'<div class="kpi"><div class="kpi-label">Proyección de egresos</div>'
-            f'<div class="kpi-val">S/ {fmt0(proy_val)}</div>'
-            f'<div class="kpi-delta gris">{nota_p}</div></div>',
-            unsafe_allow_html=True)
+    cat_activa = None
+    if rep_vista == "Gráfico circular":
+        _c = st.session_state.get("cat_detalle")
+        if _c and _c != "— elegir —":
+            cat_activa = _c
+
+    sub_cat = sub_cat_ant = None
+    if cat_activa:
+        _sig = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
+        sub_cat = act[(act["Cat Nombre"] == cat_activa) & _sig]
+        if sub_cat.empty:                       # categoría sin datos aquí → sin filtro
+            cat_activa = None
+        else:
+            _siga = (ant["Monto Neto"] < 0) if tipo_r == "Egreso" else (ant["Monto Neto"] > 0)
+            sub_cat_ant = ant[(ant["Cat Nombre"] == cat_activa) & _siga]
+
+    if cat_activa:
+        # KPIs de la categoría (reemplazan a los globales dentro del circular)
+        tot_cat = abs(sub_cat["Monto Neto"].sum())
+        tot_cat_ant = abs(sub_cat_ant["Monto Neto"].sum()) if sub_cat_ant is not None else 0
+        base = egr if tipo_r == "Egreso" else ing
+        pct_cat = (tot_cat / base * 100) if base else 0
+        n_cat = len(sub_cat)
+        ticket = tot_cat / n_cat if n_cat else 0
+        et_tipo = "los egresos" if tipo_r == "Egreso" else "los ingresos"
+
+        cc1, cc2 = st.columns([3, 1])
+        with cc1:
+            st.markdown(
+                '<div style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'
+                'border-radius:9px;padding:9px 12px;font-size:13px">'
+                f'🔎 Filtrando por categoría: <b>{cat_activa}</b></div>',
+                unsafe_allow_html=True)
+        with cc2:
+            if st.button("✕ Quitar", key="quitar_cat", use_container_width=True):
+                st.session_state["cat_detalle"] = "— elegir —"
+                st.rerun()
+
+        k1, k2 = st.columns(2)
+        with k1:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Gasto en {cat_activa}</div>'
+                f'<div class="kpi-val neg">S/ {fmt0(tot_cat)}</div>'
+                f'{delta(tot_cat, tot_cat_ant, invertir=True)}</div>',
+                unsafe_allow_html=True)
+        with k2:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">% del total</div>'
+                f'<div class="kpi-val">{pct_cat:.0f}%</div>'
+                f'<div class="kpi-delta gris">de {et_tipo} del periodo</div></div>',
+                unsafe_allow_html=True)
+        k3, k4 = st.columns(2)
+        with k3:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
+                f'<div class="kpi-val">{n_cat}</div>'
+                f'<div class="kpi-delta gris">en el periodo</div></div>',
+                unsafe_allow_html=True)
+        with k4:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Ticket promedio</div>'
+                f'<div class="kpi-val">S/ {fmt0(ticket)}</div>'
+                f'<div class="kpi-delta gris">por movimiento</div></div>',
+                unsafe_allow_html=True)
+    else:
+        k1, k2 = st.columns(2)
+        with k1:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
+                f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>{delta(ing, ing_a)}</div>',
+                unsafe_allow_html=True)
+        with k2:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Egresos</div>'
+                f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
+                f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
+
+        k3, k4 = st.columns(2)
+        with k3:
+            cl = "pos" if ahorro >= 0 else "neg"
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Ahorro neto</div>'
+                f'<div class="kpi-val {cl}">S/ {fmt0(ahorro)}</div>'
+                f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
+                unsafe_allow_html=True)
+        with k4:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Proyección de egresos</div>'
+                f'<div class="kpi-val">S/ {fmt0(proy_val)}</div>'
+                f'<div class="kpi-delta gris">{nota_p}</div></div>',
+                unsafe_allow_html=True)
 
     if rep_vista == "Gráfico evolutivo":
         # ══════════════════════════════════════
@@ -819,22 +958,11 @@ elif vista == "Reportes":
                     font=dict(size=15), showarrow=False,
                 )],
             )
-            evento = st.plotly_chart(
+            st.plotly_chart(
                 figp, use_container_width=True,
                 on_select="rerun", selection_mode="points", key="pie_cat",
             )
-
-            clic = None
-            try:
-                pts = evento["selection"]["points"]
-                if pts:
-                    clic = pts[0].get("label")
-            except Exception:
-                clic = None
-
-            if clic and clic != "Otros" and clic in list(por_cat.index):
-                if st.session_state.get("cat_detalle") != clic:
-                    st.session_state["cat_detalle"] = clic
+            # (el clic se procesa arriba, antes de los KPIs, para el cross-filter)
 
             # ── Variación vs periodo anterior ──
             if len(sel_ant) > 0 and lbl_ant:
