@@ -607,16 +607,23 @@ elif vista == "Reportes":
         if _m == 0:
             _m, _y = 12, _y - 1
 
-    opc_periodo = (["Este mes", "Mes anterior",
-                    "Últimos 30 días", "Últimos 60 días", "Últimos 90 días"]
-                   + list(map_meses.keys())
-                   + [f"Año {a}" for a in anios]
-                   + ["Todo el historial", "Personalizado"])
+    if rep_vista == "Gráfico evolutivo":
+        opc_periodo = [f"Año {a}" for a in anios] + ["Todo el historial", "Personalizado"]
+        per_key = "per_evolutivo"
+        _idx_def = opc_periodo.index("Todo el historial")
+    else:
+        opc_periodo = (["Este mes", "Mes anterior",
+                        "Últimos 30 días", "Últimos 60 días", "Últimos 90 días"]
+                       + list(map_meses.keys())
+                       + [f"Año {a}" for a in anios]
+                       + ["Todo el historial", "Personalizado"])
+        per_key = "per_circular"
+        _idx_def = 0
 
     # ── Filtros ──
     q1, q2 = st.columns(2)
     with q1:
-        per_sel = st.selectbox("Periodo", opc_periodo, key="per_resumen")
+        per_sel = st.selectbox("Periodo", opc_periodo, index=_idx_def, key=per_key)
     with q2:
         cta_r = st.selectbox("Cuenta", opc_cta,
                              format_func=lambda x: etq_cta.get(x, x), key="cta_resumen")
@@ -848,15 +855,36 @@ elif vista == "Reportes":
         # EVOLUTIVO
         # ══════════════════════════════════════
 
-        e1, e2 = st.columns([3, 1.4])
-        with e1:
-            st.markdown('<div class="sub">Ingresos vs egresos</div>',
-                        unsafe_allow_html=True)
-        with e2:
-            gran = st.selectbox("Ver por", ["Mensual", "Anual"],
-                                index=0 if gran_def == "Mensual" else 1,
-                                key="gran_evo", label_visibility="collapsed")
+        modo_evo = st.segmented_control(
+            "Modo", ["Ingresos vs egresos", "Egresos por categoría",
+                     "Ingresos por categoría"],
+            default="Ingresos vs egresos", key="modo_evo",
+            label_visibility="collapsed")
+        modo_evo = modo_evo or "Ingresos vs egresos"
 
+        # Categoría (solo en modos por categoría) + granularidad
+        cat_evo = "Todas"
+        if modo_evo == "Ingresos vs egresos":
+            gcol = st.columns([3, 1.4])[1]
+            with gcol:
+                gran = st.selectbox("Ver por", ["Mensual", "Anual"],
+                                    index=0 if gran_def == "Mensual" else 1,
+                                    key="gran_evo", label_visibility="collapsed")
+        else:
+            _sig_e = (real["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
+                else (real["Monto Neto"] > 0)
+            _cats = real[_sig_e].groupby("Cat Nombre")["Monto Neto"].sum().abs()
+            _cats = _cats[_cats > 0].sort_values(ascending=False)
+            ce1, ce2 = st.columns([3, 1.4])
+            with ce1:
+                cat_evo = st.selectbox("Categoría", ["Todas"] + list(_cats.index),
+                                       key="cat_evo", label_visibility="collapsed")
+            with ce2:
+                gran = st.selectbox("Ver por", ["Mensual", "Anual"],
+                                    index=0 if gran_def == "Mensual" else 1,
+                                    key="gran_evo", label_visibility="collapsed")
+
+        # Cubos de tiempo (claves + etiquetas)
         if gran == "Mensual":
             if per_sel.startswith("Año"):
                 anio = int(per_sel.split()[1])
@@ -867,33 +895,74 @@ elif vista == "Reportes":
                 fin_p = pd.Period(d_fin, freq="M")
                 claves = [fin_p - i for i in range(11, -1, -1)]
             etq = [f"{MESES_C[p.month]} {str(p.year)[2:]}" for p in claves]
-            grupo = real["Periodo"]
+            col_bucket = real["Periodo"]
         else:
             claves = sorted(real["Fecha"].dt.year.unique())
             etq = [str(a) for a in claves]
-            grupo = real["Fecha"].dt.year
+            col_bucket = real["Fecha"].dt.year
 
-        vi, ve, va = [], [], []
-        for k in claves:
-            d = real[grupo == k]
-            i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
-            e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
-            vi.append(i_)
-            ve.append(e_)
-            va.append(i_ - e_)
+        COLS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
+                "#008300", "#4a3aa7", "#e34948"]
 
-        fig = go.Figure()
-        fig.add_bar(x=etq, y=vi, name="Ingresos", marker_color="#1baf7a")
-        fig.add_bar(x=etq, y=ve, name="Egresos", marker_color="#eb6834")
-        fig.add_scatter(x=etq, y=va, name="Ahorro neto", mode="lines+markers",
-                        line=dict(color="#2a78d6", width=2), marker=dict(size=5))
+        if modo_evo == "Ingresos vs egresos":
+            st.markdown('<div class="sub">Ingresos vs egresos</div>',
+                        unsafe_allow_html=True)
+            vi, ve, va = [], [], []
+            for k in claves:
+                d = real[col_bucket == k]
+                i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
+                e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
+                vi.append(i_)
+                ve.append(e_)
+                va.append(i_ - e_)
+            fig = go.Figure()
+            fig.add_bar(x=etq, y=vi, name="Ingresos", marker_color="#1baf7a")
+            fig.add_bar(x=etq, y=ve, name="Egresos", marker_color="#eb6834")
+            fig.add_scatter(x=etq, y=va, name="Neto", mode="lines+markers",
+                            line=dict(color="#2a78d6", width=2), marker=dict(size=6))
+            fig.update_layout(barmode="group")
+        else:
+            _sig_e = (real["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
+                else (real["Monto Neto"] > 0)
+            base = real[_sig_e].copy()
+            if cat_evo != "Todas":
+                base = base[base["Cat Nombre"] == cat_evo]
+                dim_col = "Sub Nombre"
+                titulo = f"{cat_evo} · subcategorías en el tiempo"
+            else:
+                dim_col = "Cat Nombre"
+                titulo = f"{modo_evo} en el tiempo"
+            st.markdown(f'<div class="sub">{titulo}</div>', unsafe_allow_html=True)
+
+            base["_k"] = base[dim_col].apply(
+                lambda s: s if (str(s).strip() and str(s) != "nan") else "(sin dato)")
+            base["_b"] = base["Periodo"] if gran == "Mensual" else base["Fecha"].dt.year
+            tot_by = base.groupby("_k")["Monto Neto"].sum().abs().sort_values(ascending=False)
+            top_series = list(tot_by.index[:6])
+            otros_series = list(tot_by.index[6:])
+
+            fig = go.Figure()
+            if not top_series:
+                st.info("No hay datos para este modo en el periodo.")
+            for i, s in enumerate(top_series):
+                serie = base[base["_k"] == s].groupby("_b")["Monto Neto"].sum().abs()
+                ys = [float(serie.get(k, 0)) for k in claves]
+                fig.add_bar(x=etq, y=ys, name=str(s)[:18],
+                            marker_color=COLS[i % len(COLS)])
+            if otros_series:
+                s_o = base[base["_k"].isin(otros_series)].groupby("_b")["Monto Neto"].sum().abs()
+                ys_o = [float(s_o.get(k, 0)) for k in claves]
+                fig.add_bar(x=etq, y=ys_o, name="Otros", marker_color="#b9bec4")
+            # apiladas = composición por periodo
+            fig.update_layout(barmode="stack")
+
         fig.update_layout(
-            barmode="group", height=270,
-            margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            height=300, margin=dict(l=0, r=0, t=8, b=64),
+            legend=dict(orientation="h", yanchor="top", y=-0.22, x=0,
+                        font=dict(size=11)),
             hovermode="x unified", yaxis_title="", xaxis_title="",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
     if rep_vista == "Gráfico circular":
         # ══════════════════════════════════════
