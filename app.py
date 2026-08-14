@@ -628,11 +628,17 @@ elif vista == "Reportes":
         cta_r = st.selectbox("Cuenta", opc_cta,
                              format_func=lambda x: etq_cta.get(x, x), key="cta_resumen")
 
-    q3, q4 = st.columns(2)
-    with q3:
-        proy_r = st.selectbox("Proyecto", opc_proy, key="proy_resumen")
-    with q4:
-        tipo_r = st.selectbox("Tipo", ["Egreso", "Ingreso"], key="tipo_resumen")
+    if rep_vista == "Gráfico circular":
+        q3, q4 = st.columns(2)
+        with q3:
+            proy_r = st.selectbox("Proyecto", opc_proy, key="proy_resumen")
+        with q4:
+            tipo_r = st.selectbox("Tipo", ["Egreso", "Ingreso"], key="tipo_resumen")
+    else:
+        # En el evolutivo, Proyecto y Tipo no aplican (los modos ya separan
+        # ingresos/egresos y la vista es de tendencia, no puntual).
+        proy_r = "Todos"
+        tipo_r = "Egreso"
 
     if per_sel == "Personalizado":
         _g = st.session_state.get("rango_rep", (hoy - timedelta(days=30), hoy))
@@ -739,20 +745,9 @@ elif vista == "Reportes":
         return (f'<div class="kpi-delta {clase}">{fl} {abs(p):.0f}% '
                 f'vs {lbl_ant}</div>')
 
-    # ── Total del tipo seleccionado y proyección ──
+    # ── Total del tipo seleccionado (para KPIs del circular) ──
     tot_tipo = egr if tipo_r == "Egreso" else ing
     tot_tipo_ant = egr_a if tipo_r == "Egreso" else ing_a
-    if es_mes_curso:
-        dias_mes = calendar.monthrange(hoy.year, hoy.month)[1]
-        proy_val = tot_tipo / hoy.day * dias_mes if hoy.day else tot_tipo
-        nota_p = "al cierre del mes"
-    elif per_sel.startswith("Año") and int(per_sel.split()[1]) == hoy.year:
-        transc = (hoy - datetime(hoy.year, 1, 1).date()).days + 1
-        proy_val = tot_tipo / transc * 365
-        nota_p = "al cierre del año"
-    else:
-        proy_val = tot_tipo
-        nota_p = "periodo cerrado"
 
     # ── Filtro de categoría: un solo desplegable compacto, arriba de los KPIs ──
     cat_activa = None
@@ -778,7 +773,35 @@ elif vista == "Reportes":
             _siga = (ant["Monto Neto"] < 0) if tipo_r == "Egreso" else (ant["Monto Neto"] > 0)
             sub_cat_ant = ant[(ant["Cat Nombre"] == cat_activa) & _siga]
 
-    if cat_activa:
+    if rep_vista == "Gráfico evolutivo":
+        # Resumen del periodo, sin depender del Tipo (los modos ya lo separan)
+        n_mov = len(act)
+        cls_ah = "pos" if ahorro >= 0 else "neg"
+        k1, k2 = st.columns(2)
+        with k1:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
+                f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>'
+                f'{delta(ing, ing_a)}</div>', unsafe_allow_html=True)
+        with k2:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Egresos</div>'
+                f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
+                f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
+        k3, k4 = st.columns(2)
+        with k3:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Neto</div>'
+                f'<div class="kpi-val {cls_ah}">S/ {fmt0(ahorro)}</div>'
+                f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
+                unsafe_allow_html=True)
+        with k4:
+            st.markdown(
+                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
+                f'<div class="kpi-val">{n_mov}</div>'
+                f'<div class="kpi-delta gris">en el periodo</div></div>',
+                unsafe_allow_html=True)
+    elif cat_activa:
         # KPIs de la categoría seleccionada
         tot_cat = abs(sub_cat["Monto Neto"].sum())
         tot_cat_ant = abs(sub_cat_ant["Monto Neto"].sum()) if sub_cat_ant is not None else 0
@@ -816,14 +839,14 @@ elif vista == "Reportes":
                 f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
     else:
-        # KPIs coherentes con el Tipo (Egreso o Ingreso), sin mezclar el otro
+        # KPIs del tipo seleccionado (sin proyección)
         et = "Egresos" if tipo_r == "Egreso" else "Ingresos"
         cls_t = "neg" if tipo_r == "Egreso" else "pos"
         _sig_t = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
         n_tipo = int(_sig_t.sum())
         ticket_t = tot_tipo / n_tipo if n_tipo else 0
 
-        k1, k2 = st.columns(2)
+        k1, k2, k3 = st.columns(3)
         with k1:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">{et}</div>'
@@ -832,20 +855,13 @@ elif vista == "Reportes":
                 unsafe_allow_html=True)
         with k2:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Proyección de {et.lower()}</div>'
-                f'<div class="kpi-val">S/ {fmt0(proy_val)}</div>'
-                f'<div class="kpi-delta gris">{nota_p}</div></div>',
-                unsafe_allow_html=True)
-        k3, k4 = st.columns(2)
-        with k3:
-            st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
                 f'<div class="kpi-val">{n_tipo}</div>'
                 f'<div class="kpi-delta gris">en el periodo</div></div>',
                 unsafe_allow_html=True)
-        with k4:
+        with k3:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ticket promedio</div>'
+                f'<div class="kpi"><div class="kpi-label">Ticket prom.</div>'
                 f'<div class="kpi-val">S/ {fmt0(ticket_t)}</div>'
                 f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
