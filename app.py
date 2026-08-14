@@ -732,82 +732,62 @@ elif vista == "Reportes":
         return (f'<div class="kpi-delta {clase}">{fl} {abs(p):.0f}% '
                 f'vs {lbl_ant}</div>')
 
-    # ── Proyección ──
+    # ── Total del tipo seleccionado y proyección ──
+    tot_tipo = egr if tipo_r == "Egreso" else ing
+    tot_tipo_ant = egr_a if tipo_r == "Egreso" else ing_a
     if es_mes_curso:
         dias_mes = calendar.monthrange(hoy.year, hoy.month)[1]
-        proy_val = egr / hoy.day * dias_mes if hoy.day else egr
+        proy_val = tot_tipo / hoy.day * dias_mes if hoy.day else tot_tipo
         nota_p = "al cierre del mes"
     elif per_sel.startswith("Año") and int(per_sel.split()[1]) == hoy.year:
         transc = (hoy - datetime(hoy.year, 1, 1).date()).days + 1
-        proy_val = egr / transc * 365
+        proy_val = tot_tipo / transc * 365
         nota_p = "al cierre del año"
     else:
-        proy_val = egr
+        proy_val = tot_tipo
         nota_p = "periodo cerrado"
 
-    # ── Cross-filter: categoría activa al hacer clic en el gráfico circular ──
-    # Se procesa el clic ANTES de los KPIs para que el filtro aplique al instante.
-    # Detección por cambio (pie_last) para que "Quitar" no se re-active con la
-    # selección que el gráfico mantiene guardada.
-    st.session_state.setdefault("pie_last", None)
-    if rep_vista == "Gráfico circular":
-        _ev = st.session_state.get("pie_cat")
-        _lbl = None
-        try:
-            _pts = _ev["selection"]["points"]
-            if _pts:
-                _lbl = _pts[0].get("label")
-        except Exception:
-            _lbl = None
-        if _lbl and _lbl != st.session_state.get("pie_last"):
-            st.session_state["pie_last"] = _lbl
-            if _lbl != "Otros":
-                st.session_state["cat_detalle"] = _lbl
-
+    # ── Filtro de categoría: un solo desplegable compacto, arriba de los KPIs ──
     cat_activa = None
     if rep_vista == "Gráfico circular":
-        _c = st.session_state.get("cat_detalle")
-        if _c and _c != "— elegir —":
-            cat_activa = _c
+        _sig_c = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
+        _bc = act[_sig_c].copy()
+        _bc["_abs"] = _bc["Monto Neto"].abs()
+        _catord = _bc.groupby("Cat Nombre")["_abs"].sum().sort_values(ascending=False)
+        cat_opts = ["Todas"] + [c for c in _catord.index
+                                if str(c).strip() and str(c) != "nan"]
+        if st.session_state.get("cat_filtro") not in cat_opts:
+            st.session_state["cat_filtro"] = "Todas"
+        _csel = st.selectbox("Filtrar por categoría", cat_opts, key="cat_filtro")
+        cat_activa = None if _csel == "Todas" else _csel
 
     sub_cat = sub_cat_ant = None
     if cat_activa:
         _sig = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
         sub_cat = act[(act["Cat Nombre"] == cat_activa) & _sig]
-        if sub_cat.empty:                       # categoría sin datos aquí → sin filtro
+        if sub_cat.empty:
             cat_activa = None
         else:
             _siga = (ant["Monto Neto"] < 0) if tipo_r == "Egreso" else (ant["Monto Neto"] > 0)
             sub_cat_ant = ant[(ant["Cat Nombre"] == cat_activa) & _siga]
 
     if cat_activa:
-        # KPIs de la categoría (reemplazan a los globales dentro del circular)
+        # KPIs de la categoría seleccionada
         tot_cat = abs(sub_cat["Monto Neto"].sum())
         tot_cat_ant = abs(sub_cat_ant["Monto Neto"].sum()) if sub_cat_ant is not None else 0
-        base = egr if tipo_r == "Egreso" else ing
-        pct_cat = (tot_cat / base * 100) if base else 0
+        pct_cat = (tot_cat / tot_tipo * 100) if tot_tipo else 0
         n_cat = len(sub_cat)
         ticket = tot_cat / n_cat if n_cat else 0
         et_tipo = "los egresos" if tipo_r == "Egreso" else "los ingresos"
-
-        cc1, cc2 = st.columns([3, 1])
-        with cc1:
-            st.markdown(
-                '<div style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'
-                'border-radius:9px;padding:9px 12px;font-size:13px">'
-                f'🔎 Filtrando por categoría: <b>{cat_activa}</b></div>',
-                unsafe_allow_html=True)
-        with cc2:
-            if st.button("✕ Quitar", key="quitar_cat", use_container_width=True):
-                st.session_state["cat_detalle"] = "— elegir —"
-                st.rerun()
+        lab_g = "Gasto" if tipo_r == "Egreso" else "Ingreso"
+        cls_c = "neg" if tipo_r == "Egreso" else "pos"
 
         k1, k2 = st.columns(2)
         with k1:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Gasto en {cat_activa}</div>'
-                f'<div class="kpi-val neg">S/ {fmt0(tot_cat)}</div>'
-                f'{delta(tot_cat, tot_cat_ant, invertir=True)}</div>',
+                f'<div class="kpi"><div class="kpi-label">{lab_g} en {cat_activa}</div>'
+                f'<div class="kpi-val {cls_c}">S/ {fmt0(tot_cat)}</div>'
+                f'{delta(tot_cat, tot_cat_ant, invertir=(tipo_r == "Egreso"))}</div>',
                 unsafe_allow_html=True)
         with k2:
             st.markdown(
@@ -829,31 +809,38 @@ elif vista == "Reportes":
                 f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
     else:
+        # KPIs coherentes con el Tipo (Egreso o Ingreso), sin mezclar el otro
+        et = "Egresos" if tipo_r == "Egreso" else "Ingresos"
+        cls_t = "neg" if tipo_r == "Egreso" else "pos"
+        _sig_t = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
+        n_tipo = int(_sig_t.sum())
+        ticket_t = tot_tipo / n_tipo if n_tipo else 0
+
         k1, k2 = st.columns(2)
         with k1:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
-                f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>{delta(ing, ing_a)}</div>',
+                f'<div class="kpi"><div class="kpi-label">{et}</div>'
+                f'<div class="kpi-val {cls_t}">S/ {fmt0(tot_tipo)}</div>'
+                f'{delta(tot_tipo, tot_tipo_ant, invertir=(tipo_r == "Egreso"))}</div>',
                 unsafe_allow_html=True)
         with k2:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Egresos</div>'
-                f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
-                f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
-
+                f'<div class="kpi"><div class="kpi-label">Proyección de {et.lower()}</div>'
+                f'<div class="kpi-val">S/ {fmt0(proy_val)}</div>'
+                f'<div class="kpi-delta gris">{nota_p}</div></div>',
+                unsafe_allow_html=True)
         k3, k4 = st.columns(2)
         with k3:
-            cl = "pos" if ahorro >= 0 else "neg"
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ahorro neto</div>'
-                f'<div class="kpi-val {cl}">S/ {fmt0(ahorro)}</div>'
-                f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
+                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
+                f'<div class="kpi-val">{n_tipo}</div>'
+                f'<div class="kpi-delta gris">en el periodo</div></div>',
                 unsafe_allow_html=True)
         with k4:
             st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Proyección de egresos</div>'
-                f'<div class="kpi-val">S/ {fmt0(proy_val)}</div>'
-                f'<div class="kpi-delta gris">{nota_p}</div></div>',
+                f'<div class="kpi"><div class="kpi-label">Ticket promedio</div>'
+                f'<div class="kpi-val">S/ {fmt0(ticket_t)}</div>'
+                f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
 
     if rep_vista == "Gráfico evolutivo":
@@ -916,31 +903,55 @@ elif vista == "Reportes":
         if tipo_r == "Egreso":
             sel = act[act["Monto Neto"] < 0].copy()
             sel_ant = ant[ant["Monto Neto"] < 0].copy()
-            titulo_pie = "Egresos por categoría"
+            base_lbl = "Egresos"
         else:
             sel = act[act["Monto Neto"] > 0].copy()
             sel_ant = ant[ant["Monto Neto"] > 0].copy()
-            titulo_pie = "Ingresos por categoría"
+            base_lbl = "Ingresos"
+
+        # Composición por categoría (se conserva para el % del total en el detalle)
+        por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
+        por_cat = por_cat[por_cat > 0].sort_values(ascending=False)
+
+        # Dimensión de la torta: por categoría (Todas) o por subcategoría (al filtrar)
+        if cat_activa:
+            dim_col = "Sub Nombre"
+            base_pie = sel[sel["Cat Nombre"] == cat_activa].copy()
+            base_pie_ant = sel_ant[sel_ant["Cat Nombre"] == cat_activa].copy()
+            titulo_pie = f"{cat_activa} · por subcategoría"
+            var_titulo = f"Subcategorías vs {lbl_ant}"
+        else:
+            dim_col = "Cat Nombre"
+            base_pie = sel
+            base_pie_ant = sel_ant
+            titulo_pie = f"{base_lbl} por categoría"
+            var_titulo = f"Variación vs {lbl_ant}"
 
         st.markdown(f'<div class="sub">{titulo_pie}</div>', unsafe_allow_html=True)
 
-        if len(sel) == 0:
+        if len(base_pie) == 0:
             st.info("No hay movimientos de este tipo en el periodo seleccionado.")
         else:
-            por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-            por_cat = por_cat[por_cat > 0].sort_values(ascending=False)
+            def _agg(df):
+                g = df.copy()
+                g["_k"] = g[dim_col].apply(
+                    lambda s: s if (str(s).strip() and str(s) != "nan") else "(sin dato)")
+                r = g.groupby("_k")["Monto Neto"].sum().abs()
+                return r[r > 0].sort_values(ascending=False)
+
+            por_pie = _agg(base_pie)
 
             COLORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
                        "#008300", "#4a3aa7", "#e34948", "#888780"]
 
-            if len(por_cat) > 9:
-                top = por_cat.head(8)
-                otros = por_cat.iloc[8:].sum()
+            if len(por_pie) > 9:
+                top = por_pie.head(8)
+                otros = por_pie.iloc[8:].sum()
                 etiquetas_pie = list(top.index) + ["Otros"]
                 valores_pie = list(top.values) + [otros]
             else:
-                etiquetas_pie = list(por_cat.index)
-                valores_pie = list(por_cat.values)
+                etiquetas_pie = list(por_pie.index)
+                valores_pie = list(por_pie.values)
 
             figp = go.Figure(go.Pie(
                 labels=etiquetas_pie, values=valores_pie, hole=0.45,
@@ -954,24 +965,23 @@ elif vista == "Reportes":
                 height=340, margin=dict(l=0, r=0, t=6, b=0),
                 legend=dict(orientation="v", x=1, y=0.5, font=dict(size=11)),
                 annotations=[dict(
-                    text=f"S/ {fmt0(por_cat.sum())}", x=0.5, y=0.5,
+                    text=f"S/ {fmt0(por_pie.sum())}", x=0.5, y=0.5,
                     font=dict(size=15), showarrow=False,
                 )],
             )
-            st.plotly_chart(
-                figp, use_container_width=True,
-                on_select="rerun", selection_mode="points", key="pie_cat",
-            )
-            # (el clic se procesa arriba, antes de los KPIs, para el cross-filter)
+            st.plotly_chart(figp, use_container_width=True)
+            cap_pie = ("Composición de la categoría filtrada." if cat_activa
+                       else "La torta es referencial; para filtrar usa el desplegable de arriba.")
+            st.caption(cap_pie)
 
-            # ── Variación vs periodo anterior ──
-            if len(sel_ant) > 0 and lbl_ant:
-                a_ = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-                b_ = sel_ant.groupby("Cat Nombre")["Monto Neto"].sum().abs()
+            # ── Variación vs periodo anterior (misma dimensión que la torta) ──
+            if len(base_pie_ant) > 0 and lbl_ant:
+                a_ = por_pie
+                b_ = _agg(base_pie_ant)
                 var = a_.subtract(b_, fill_value=0).sort_values(ascending=False)
                 var = var[var.abs() > 0.5].head(8)
                 if len(var) > 0:
-                    st.markdown(f'<div class="sub">Variación vs {lbl_ant}</div>',
+                    st.markdown(f'<div class="sub">{var_titulo}</div>',
                                 unsafe_allow_html=True)
                     filas = []
                     for c, v in var.items():
@@ -984,30 +994,19 @@ elif vista == "Reportes":
                     st.markdown("".join(filas), unsafe_allow_html=True)
 
             # ══════════════════════════════════
-            # ══════════════════════════════════
             # DETALLE POR CATEGORÍA
             # ══════════════════════════════════
 
             st.markdown('<div class="sub">Ver detalle</div>', unsafe_allow_html=True)
-            st.caption("Toca un sector del gráfico o elige la categoría de la lista")
 
-            opciones_det = ["— elegir —"] + list(por_cat.index)
-            if st.session_state.get("cat_detalle") not in opciones_det:
-                st.session_state["cat_detalle"] = "— elegir —"
-
-            v1, v2 = st.columns([2, 1.6])
-            with v1:
-                cat_det = st.selectbox(
-                    "Categoría", opciones_det,
-                    label_visibility="collapsed", key="cat_detalle",
-                )
-            with v2:
+            if not cat_activa:
+                st.caption("Elige una categoría en el filtro de arriba para ver su detalle.")
+            else:
                 dim = st.radio(
                     "Ver por", ["Subcategoría", "Beneficiario", "Movimientos"],
                     horizontal=True, label_visibility="collapsed", key="dim_detalle",
                 )
-
-            if cat_det != "— elegir —":
+                cat_det = cat_activa
                 det = sel[sel["Cat Nombre"] == cat_det].copy()
                 total_det = abs(det["Monto Neto"].sum())
                 pct_det = total_det / por_cat.sum() * 100 if por_cat.sum() else 0
@@ -1058,62 +1057,74 @@ elif vista == "Reportes":
                         st.caption(f"Mostrando 15 de {len(det)} movimientos")
 
     # ══════════════════════════════════════
-    # PENDIENTES Y PROYECTOS
+    # PENDIENTES Y PROYECTOS (solo en el reporte circular)
     # ══════════════════════════════════════
 
-    p1, p2 = st.columns(2)
+    if rep_vista == "Gráfico circular":
+        p1, p2 = st.columns(2)
 
-    with p1:
-        if "Estado" in dfr.columns:
-            pend = dfr[dfr["Estado"].astype(str).str.strip() == "Pendiente regularizar"]
-        else:
-            pend = dfr.iloc[0:0]
-        total_p = abs(pend["Monto Neto"].sum()) if len(pend) > 0 else 0
-        filas = []
-        for _, r in pend.sort_values("Fecha", ascending=False).head(4).iterrows():
-            filas.append(
-                f'<div class="card-row"><span class="gris">{str(r["Desc"])[:22]}</span>'
-                f'<span>S/ {fmt0(abs(r["Monto Neto"]))}</span></div>')
-        if len(pend) > 0:
-            dias = (hoy - pend["Fecha"].min().date()).days
-            nota = f'{len(pend)} gastos · el más antiguo hace {dias} días'
-        else:
-            nota = "No hay gastos pendientes"
-        st.markdown(
-            f'<div class="card"><div class="card-tit">⚠️ Pendiente de regularizar</div>'
-            f'<div class="card-val neg">S/ {fmt0(total_p)}</div>'
-            f'{"".join(filas)}<div class="card-nota">{nota}</div></div>',
-            unsafe_allow_html=True)
+        with p1:
+            if "Estado" in dfr.columns:
+                pend = dfr[dfr["Estado"].astype(str).str.strip() == "Pendiente regularizar"]
+            else:
+                pend = dfr.iloc[0:0]
+            total_p = abs(pend["Monto Neto"].sum()) if len(pend) > 0 else 0
+            filas = []
+            for _, r in pend.sort_values("Fecha", ascending=False).head(4).iterrows():
+                filas.append(
+                    f'<div class="card-row"><span class="gris">{str(r["Desc"])[:22]}</span>'
+                    f'<span>S/ {fmt0(abs(r["Monto Neto"]))}</span></div>')
+            if len(pend) > 0:
+                dias = (hoy - pend["Fecha"].min().date()).days
+                nota = f'{len(pend)} gastos · el más antiguo hace {dias} días'
+            else:
+                nota = "No hay gastos pendientes"
+            st.markdown(
+                f'<div class="card"><div class="card-tit">⚠️ Pendiente de regularizar</div>'
+                f'<div class="card-val neg">S/ {fmt0(total_p)}</div>'
+                f'{"".join(filas)}<div class="card-nota">{nota}</div></div>',
+                unsafe_allow_html=True)
 
-    with p2:
-        bloques = []
-        if not proyectos.empty:
-            c_est = buscar_col(proyectos, ["Estado"])
-            c_nom = buscar_col(proyectos, ["Nombre Proyecto", "Nombre"])
-            c_pre = buscar_col(proyectos, ["Presupuesto PEN", "Presupuesto"])
-            pr = proyectos.copy()
-            if c_est and solo_act_r:
-                pr = pr[pr[c_est].astype(str).str.strip().str.lower().isin(ACTIVOS)]
-            if c_nom and c_pre:
-                pr[c_pre] = a_numero(pr[c_pre])
-                for _, r in pr.head(4).iterrows():
-                    nom = str(r[c_nom]).strip()
-                    pres = float(r[c_pre])
-                    gasto = abs(mov[(mov["Proyecto Nombre"] == nom) &
-                                    (mov["Monto Neto"] < 0)]["Monto Neto"].sum())
-                    pct = (gasto / pres * 100) if pres > 0 else 0
-                    color = "#1baf7a" if pct < 70 else ("#eda100" if pct < 90 else "#d03b3b")
-                    bloques.append(
-                        f'<div class="proy-lbl"><span>{nom[:22]}</span>'
-                        f'<span class="gris">{pct:.0f}%</span></div>'
-                        f'<div class="barra-bg"><div class="barra-fill" '
-                        f'style="width:{min(pct, 100)}%;background:{color};"></div></div>'
-                        f'<div class="proy-nota">S/ {fmt0(gasto)} de S/ {fmt0(pres)}</div>')
-        if not bloques:
-            bloques = ['<div class="card-nota">No hay proyectos activos</div>']
-        st.markdown(
-            f'<div class="card"><div class="card-tit">📁 Proyectos activos</div>'
-            f'{"".join(bloques)}</div>', unsafe_allow_html=True)
+        with p2:
+            bloques = []
+            if not proyectos.empty:
+                c_est = buscar_col(proyectos, ["Estado"])
+                c_nom = buscar_col(proyectos, ["Nombre Proyecto", "Nombre"])
+                c_pre = buscar_col(proyectos, ["Presupuesto PEN", "Presupuesto"])
+                pr = proyectos.copy()
+                if c_est and solo_act_r:
+                    pr = pr[pr[c_est].astype(str).str.strip().str.lower().isin(ACTIVOS)]
+                if c_nom:
+                    if c_pre:
+                        pr[c_pre] = a_numero(pr[c_pre])
+                    for _, r in pr.head(4).iterrows():
+                        nom = str(r[c_nom]).strip()
+                        pres = float(r[c_pre]) if c_pre else 0.0
+                        gasto = abs(mov[(mov["Proyecto Nombre"] == nom) &
+                                        (mov["Monto Neto"] < 0)]["Monto Neto"].sum())
+                        if pres > 0:
+                            pct = gasto / pres * 100
+                            color = "#1baf7a" if pct < 70 else ("#eda100" if pct < 90 else "#d03b3b")
+                            bloques.append(
+                                f'<div class="proy-lbl"><span>{nom[:22]}</span>'
+                                f'<span class="gris">{pct:.0f}%</span></div>'
+                                f'<div class="barra-bg"><div class="barra-fill" '
+                                f'style="width:{min(pct, 100)}%;background:{color};"></div></div>'
+                                f'<div class="proy-nota">Gastado S/ {fmt0(gasto)} '
+                                f'de S/ {fmt0(pres)} de presupuesto</div>')
+                        else:
+                            bloques.append(
+                                f'<div class="proy-lbl"><span>{nom[:22]}</span>'
+                                f'<span class="gris">sin ppto.</span></div>'
+                                f'<div class="proy-nota">Gastado S/ {fmt0(gasto)} · '
+                                f'sin presupuesto cargado</div>')
+            if not bloques:
+                bloques = ['<div class="card-nota">No hay proyectos activos</div>']
+            st.markdown(
+                f'<div class="card"><div class="card-tit">📁 Proyectos activos</div>'
+                f'<div class="card-nota" style="margin:-2px 0 8px">'
+                f'Gasto acumulado vs presupuesto</div>'
+                f'{"".join(bloques)}</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════
