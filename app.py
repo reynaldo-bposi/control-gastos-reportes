@@ -900,22 +900,34 @@ elif vista == "Reportes":
                                     index=0 if gran_def == "Mensual" else 1,
                                     key="gran_evo", label_visibility="collapsed")
 
+        # Excluir del gráfico (evita que un gasto único grande distorsione)
+        if modo_evo != "Ingresos vs egresos" and cat_evo != "Todas":
+            dim_excl_e = "Sub Nombre"
+            _poole = real[real["Cat Nombre"] == cat_evo]
+        else:
+            dim_excl_e = "Cat Nombre"
+            _poole = real
+        opts_excl_e = sorted({str(x) for x in _poole[dim_excl_e].dropna()
+                              if str(x).strip() and str(x) != "nan"})
+        excl_e = st.multiselect("Excluir del gráfico", opts_excl_e, key="excl_evo")
+        real_e = real[~real[dim_excl_e].astype(str).isin(excl_e)] if excl_e else real
+
         # Cubos de tiempo (claves + etiquetas)
         if gran == "Mensual":
             if per_sel.startswith("Año"):
                 anio = int(per_sel.split()[1])
                 claves = [pd.Period(f"{anio}-{m:02d}", freq="M") for m in range(1, 13)]
             elif per_sel == "Todo el historial":
-                claves = sorted(real["Periodo"].unique())[-24:]
+                claves = sorted(real_e["Periodo"].unique())[-24:]
             else:
                 fin_p = pd.Period(d_fin, freq="M")
                 claves = [fin_p - i for i in range(11, -1, -1)]
             etq = [f"{MESES_C[p.month]} {str(p.year)[2:]}" for p in claves]
-            col_bucket = real["Periodo"]
+            col_bucket = real_e["Periodo"]
         else:
-            claves = sorted(real["Fecha"].dt.year.unique())
+            claves = sorted(real_e["Fecha"].dt.year.unique())
             etq = [str(a) for a in claves]
-            col_bucket = real["Fecha"].dt.year
+            col_bucket = real_e["Fecha"].dt.year
 
         COLS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
                 "#008300", "#4a3aa7", "#e34948"]
@@ -925,7 +937,7 @@ elif vista == "Reportes":
                         unsafe_allow_html=True)
             vi, ve, va = [], [], []
             for k in claves:
-                d = real[col_bucket == k]
+                d = real_e[col_bucket == k]
                 i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
                 e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
                 vi.append(i_)
@@ -938,9 +950,9 @@ elif vista == "Reportes":
                             line=dict(color="#2a78d6", width=2), marker=dict(size=6))
             fig.update_layout(barmode="group")
         else:
-            _sig_e = (real["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
-                else (real["Monto Neto"] > 0)
-            base = real[_sig_e].copy()
+            _sig_e = (real_e["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
+                else (real_e["Monto Neto"] > 0)
+            base = real_e[_sig_e].copy()
             if cat_evo != "Todas":
                 base = base[base["Cat Nombre"] == cat_evo]
                 dim_col = "Sub Nombre"
@@ -993,6 +1005,19 @@ elif vista == "Reportes":
             sel = act[act["Monto Neto"] > 0].copy()
             sel_ant = ant[ant["Monto Neto"] > 0].copy()
             base_lbl = "Ingresos"
+
+        # Excluir categorías/subcategorías del gráfico (para que un gasto único
+        # grande —ej. un carro— no distorsione la composición).
+        dim_excl = "Sub Nombre" if cat_activa else "Cat Nombre"
+        _pool = sel[sel["Cat Nombre"] == cat_activa] if cat_activa else sel
+        opts_excl = sorted({str(x) for x in _pool[dim_excl].dropna()
+                            if str(x).strip() and str(x) != "nan"})
+        excl = st.multiselect(
+            "Excluir del gráfico", opts_excl,
+            key="excl_" + (f"sub_{cat_activa}" if cat_activa else "cat"))
+        if excl:
+            sel = sel[~sel[dim_excl].astype(str).isin(excl)]
+            sel_ant = sel_ant[~sel_ant[dim_excl].astype(str).isin(excl)]
 
         # Composición por categoría (se conserva para el % del total en el detalle)
         por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
@@ -1057,6 +1082,8 @@ elif vista == "Reportes":
             st.plotly_chart(figp, use_container_width=True)
             cap_pie = ("Composición de la categoría filtrada." if cat_activa
                        else "La torta es referencial; para filtrar usa el desplegable de arriba.")
+            if excl:
+                cap_pie += f" · Excluyendo: {', '.join(excl)} (no afecta los KPIs de arriba)"
             st.caption(cap_pie)
 
             # ── Variación vs periodo anterior (misma dimensión que la torta) ──
