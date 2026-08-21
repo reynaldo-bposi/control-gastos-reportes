@@ -294,24 +294,38 @@ if vista == "Movimientos":
     col_ord = buscar_col(cuentas, ["Orden", "orden", "N° Orden"])
     col_mon = buscar_col(cuentas, ["Moneda"])
 
+    def _es_usd(m):
+        m = str(m).upper()
+        return any(k in m for k in ("USD", "DOL", "US$", "$"))
+
     cta = cuentas.copy()
     if solo_activos and col_act:
         cta = cta[cta[col_act].astype(str).str.strip().str.lower().isin(ACTIVOS)]
     cta["_ord"] = a_numero(cta[col_ord]) if col_ord else range(len(cta))
-    cta["_mon"] = cta[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
-    cta["_pri"] = cta["_mon"].map({"PEN": 0, "USD": 1}).fillna(9)
-    cta = cta.sort_values(["_pri", "_mon", "_ord", "Nombre Cuenta"])
+    cta["_cur"] = (cta[col_mon].map(lambda m: "USD" if _es_usd(m) else "PEN")
+                   if col_mon else "PEN")
+    cta["_pri"] = cta["_cur"].map({"PEN": 0, "USD": 1}).fillna(9)
+    cta = cta.sort_values(["_pri", "_ord", "Nombre Cuenta"])
+
+    cta_moneda = dict(zip(cta["Nombre Cuenta"].astype(str).str.strip(), cta["_cur"]))
+    hay_soles = bool((cta["_cur"] == "PEN").any())
+    hay_usd = bool((cta["_cur"] == "USD").any())
 
     opciones_cuenta = ["Todas"]
     etiquetas = {"Todas": "Todas las cuentas"}
+    if hay_soles and hay_usd:
+        opciones_cuenta.append("Todas soles")
+        etiquetas["Todas soles"] = "Todas — en soles (S/)"
+        opciones_cuenta.append("Todas dólares")
+        etiquetas["Todas dólares"] = "Todas — en dólares (US$)"
     moneda_actual = None
     for _, r in cta.iterrows():
         nombre = str(r["Nombre Cuenta"]).strip()
         if not nombre:
             continue
-        if r["_mon"] != moneda_actual:
-            moneda_actual = r["_mon"]
-            sep = f"── {moneda_actual} ──"
+        if r["_cur"] != moneda_actual:
+            moneda_actual = r["_cur"]
+            sep = "── Soles ──" if moneda_actual == "PEN" else "── Dólares ──"
             opciones_cuenta.append(sep)
             etiquetas[sep] = sep
         opciones_cuenta.append(nombre)
@@ -411,52 +425,64 @@ if vista == "Movimientos":
             height=0,
         )
 
-    base = mov.copy()
-    saldo_inicial = 0.0
+    # ── Filtro completo: cuenta/moneda + proyecto + perfil + tipo ──
+    if cuenta_sel == "Todas":
+        cuentas_incl = set(cta["Nombre Cuenta"].astype(str).str.strip())
+        moneda_view = "PEN"
+    elif cuenta_sel == "Todas soles":
+        cuentas_incl = set(cta[cta["_cur"] == "PEN"]["Nombre Cuenta"].astype(str).str.strip())
+        moneda_view = "PEN"
+    elif cuenta_sel == "Todas dólares":
+        cuentas_incl = set(cta[cta["_cur"] == "USD"]["Nombre Cuenta"].astype(str).str.strip())
+        moneda_view = "USD"
+    else:
+        cuentas_incl = {cuenta_sel}
+        moneda_view = cta_moneda.get(cuenta_sel, "PEN")
 
-    if cuenta_sel != "Todas":
-        base = base[base["Cuenta Nombre"] == cuenta_sel]
+    simbolo = "US$" if moneda_view == "USD" else "S/"
+    varias_ctas = cuenta_sel in ("Todas", "Todas soles", "Todas dólares")
+    mono_moneda = len({cta_moneda.get(c, "PEN") for c in cuentas_incl}) <= 1
+
+    base = mov[mov["Cuenta Nombre"].isin(cuentas_incl)].copy()
+    if proyecto_sel != "Todos":
+        base = base[base["Proyecto Nombre"] == proyecto_sel]
+    if perfil_sel != "Todos" and "Perfil" in base.columns:
+        base = base[base["Perfil"].astype(str).str.strip() == perfil_sel]
+    if tipo_sel != "Todos":
+        base = base[base["Tipo"] == tipo_sel]
+
+    # Saldo inicial base: solo cuando NO hay filtros de subconjunto
+    subset_filter = (proyecto_sel != "Todos") or (perfil_sel != "Todos") \
+        or (tipo_sel != "Todos")
+    if subset_filter:
+        base_ini = 0.0
+    elif varias_ctas:
+        base_ini = float(cuentas[
+            cuentas["Nombre Cuenta"].astype(str).str.strip().isin(cuentas_incl)
+        ]["Saldo Inicial"].sum())
+    else:
+        base_ini = 0.0
         ids = [k for k, v in d_cuentas.items() if v == cuenta_sel]
         if ids:
             fila = cuentas[cuentas["ID"].astype(str).str.strip() == ids[0]]
             if not fila.empty:
-                saldo_inicial = float(fila["Saldo Inicial"].iloc[0])
-    elif proyecto_sel == "Todos":
-        visibles = set(cta["Nombre Cuenta"].astype(str).str.strip())
-        base = base[base["Cuenta Nombre"].isin(visibles)]
-        saldo_inicial = float(
-            cuentas[
-                cuentas["Nombre Cuenta"].astype(str).str.strip().isin(visibles)
-            ]["Saldo Inicial"].sum()
-        )
+                base_ini = float(fila["Saldo Inicial"].iloc[0])
 
-    if proyecto_sel != "Todos":
-        base = base[base["Proyecto Nombre"] == proyecto_sel]
-        if cuenta_sel == "Todas":
-            saldo_inicial = 0.0
-
+    # Saldo corriente sobre el conjunto YA filtrado, con arrastre previo a 'desde'
     base = base.sort_values(["Fecha", "_RowNumber"], ascending=[True, True])
-    base["Saldo Cierre"] = saldo_inicial + base["Monto Neto"].cumsum()
-
+    carry = base[base["Fecha"].dt.date < desde]["Monto Neto"].sum()
+    saldo_inicial = base_ini + carry
     df = base[(base["Fecha"].dt.date >= desde) & (base["Fecha"].dt.date <= hasta)].copy()
-
-    if perfil_sel != "Todos" and "Perfil" in df.columns:
-        df = df[df["Perfil"].astype(str).str.strip() == perfil_sel]
-    if tipo_sel != "Todos":
-        df = df[df["Tipo"] == tipo_sel]
+    df["Saldo Cierre"] = saldo_inicial + df["Monto Neto"].cumsum()
 
     if "desc" not in st.session_state:
         st.session_state.desc = True
 
     ingresos = df[df["Monto Neto"] > 0]["Monto Neto"].sum()
     egresos = df[df["Monto Neto"] < 0]["Monto Neto"].sum()
-    saldo_actual = base["Saldo Cierre"].iloc[-1] if len(base) > 0 else saldo_inicial
+    saldo_actual = base_ini + base[base["Fecha"].dt.date <= hasta]["Monto Neto"].sum()
 
-    etiqueta_saldo = (
-        "Neto del proyecto"
-        if (proyecto_sel != "Todos" and cuenta_sel == "Todas")
-        else "Saldo actual"
-    )
+    etiqueta_saldo = "Neto (filtrado)" if subset_filter else "Saldo actual"
 
     k1, k2 = st.columns(2)
     with k1:
@@ -468,9 +494,15 @@ if vista == "Movimientos":
         )
     with k2:
         clase = "pos" if saldo_actual >= 0 else "neg"
+        if mono_moneda:
+            val_saldo = f'{simbolo} {fmt(saldo_actual)}'
+            et_s = etiqueta_saldo
+        else:
+            val_saldo = "varias monedas"
+            et_s = "Saldo"
         st.markdown(
-            f'<div class="kpi"><div class="kpi-label">{etiqueta_saldo}</div>'
-            f'<div class="kpi-val {clase}">S/ {fmt(saldo_actual)}</div></div>',
+            f'<div class="kpi"><div class="kpi-label">{et_s}</div>'
+            f'<div class="kpi-val {clase}">{val_saldo}</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -503,745 +535,11 @@ if vista == "Movimientos":
             html.append(f'<div class="mov-fecha">{f}</div>')
             fecha_actual = f
         signo = "pos" if r["Monto Neto"] >= 0 else "neg"
-        monto = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
-        extra = f" · {r['Cuenta Nombre']}" if cuenta_sel == "Todas" else ""
+        sim_r = "US$" if cta_moneda.get(str(r["Cuenta Nombre"]).strip()) == "USD" else "S/"
+        monto = f"{'+' if r['Monto Neto'] >= 0 else '-'}{sim_r} {fmt(abs(r['Monto Neto']))}"
+        extra = f" · {r['Cuenta Nombre']}" if varias_ctas else ""
+        saldo_html = (f'<span class="mov-saldo">Saldo: {simbolo} '
+                      f'{fmt(r["Saldo Cierre"])}</span>') if mono_moneda else ""
         html.append(
             f'<div class="mov-row">'
-            f'<div class="mov-izq">'
-            f'<span class="mov-desc {signo}">{r["Desc"]}</span>'
-            f'<span class="mov-cat">{r["CatSub"]}{extra}</span>'
-            f'</div>'
-            f'<div class="mov-der">'
-            f'<span class="mov-monto {signo}">{monto}</span>'
-            f'<span class="mov-saldo">Saldo: S/ {fmt(r["Saldo Cierre"])}</span>'
-            f'</div></div>'
-        )
-    st.markdown("".join(html), unsafe_allow_html=True)
-
-    st.markdown("")
-    cols_exp = ["Fecha", "Cuenta Nombre", "Desc", "CatSub", "Proyecto Nombre",
-                "Monto Neto", "Saldo Cierre"]
-    cols_exp = [c for c in cols_exp if c in df.columns]
-    exportar = df[cols_exp].copy()
-    exportar["Fecha"] = exportar["Fecha"].dt.strftime("%d/%m/%Y")
-    exportar.columns = [
-        {"Cuenta Nombre": "Cuenta", "Desc": "Descripción", "CatSub": "Categoría",
-         "Proyecto Nombre": "Proyecto", "Monto Neto": "Monto",
-         "Saldo Cierre": "Saldo cierre"}.get(c, c)
-        for c in cols_exp
-    ]
-    csv = exportar.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "📥 Descargar movimientos (CSV)", csv,
-        file_name=f"movimientos_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-    )
-
-# ══════════════════════════════════════════
-# VISTA: REPORTES
-# ══════════════════════════════════════════
-
-elif vista == "Reportes":
-    tr1, tr2 = st.columns([3, 1.6])
-    with tr1:
-        st.markdown('<div class="titulo">Reportes</div>', unsafe_allow_html=True)
-    with tr2:
-        solo_act_r = st.toggle("Solo activos", value=True, key="tg_resumen")
-
-    # Sub-navegación de reportes
-    rep_vista = st.radio(
-        "Reporte", ["Gráfico circular", "Gráfico evolutivo"],
-        horizontal=True, label_visibility="collapsed", key="rep_vista",
-    )
-
-    # ── Listas para filtros ──
-    col_act = buscar_col(cuentas, ["Activa", "Activo"])
-    col_ord = buscar_col(cuentas, ["Orden", "orden", "N° Orden"])
-    col_mon = buscar_col(cuentas, ["Moneda"])
-
-    ctar = cuentas.copy()
-    if solo_act_r and col_act:
-        ctar = ctar[ctar[col_act].astype(str).str.strip().str.lower().isin(ACTIVOS)]
-    ctar["_ord"] = a_numero(ctar[col_ord]) if col_ord else range(len(ctar))
-    ctar["_mon"] = ctar[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
-    ctar["_pri"] = ctar["_mon"].map({"PEN": 0, "USD": 1}).fillna(9)
-    ctar = ctar.sort_values(["_pri", "_mon", "_ord", "Nombre Cuenta"])
-
-    opc_cta = ["Todas"]
-    etq_cta = {"Todas": "Todas las cuentas"}
-    mon_act = None
-    for _, r in ctar.iterrows():
-        nom = str(r["Nombre Cuenta"]).strip()
-        if not nom:
-            continue
-        if r["_mon"] != mon_act:
-            mon_act = r["_mon"]
-            sp = f"── {mon_act} ──"
-            opc_cta.append(sp)
-            etq_cta[sp] = sp
-        opc_cta.append(nom)
-        etq_cta[nom] = f"   {nom}"
-
-    opc_proy = ["Todos"]
-    if not proyectos.empty:
-        c_est = buscar_col(proyectos, ["Estado"])
-        c_nom = buscar_col(proyectos, ["Nombre Proyecto", "Nombre"])
-        pr = proyectos.copy()
-        if solo_act_r and c_est:
-            pr = pr[pr[c_est].astype(str).str.strip().str.lower().isin(ACTIVOS)]
-        if c_nom:
-            opc_proy += sorted([n for n in pr[c_nom].astype(str).str.strip().unique() if n])
-
-    anios = sorted(mov["Fecha"].dt.year.unique(), reverse=True)
-
-    # Meses completos recientes (dinámicos) para filtrar rápido; se saltan
-    # los 2 primeros porque ya están como "Este mes" / "Mes anterior".
-    fmin_mes = fecha_min.replace(day=1)
-    map_meses, _y, _m, _c = {}, hoy.year, hoy.month, 0
-    for _i in range(30):
-        _d0 = datetime(_y, _m, 1).date()
-        if _i >= 2 and _d0 >= fmin_mes and _c < 12:
-            map_meses[f"{MESES[_m].capitalize()} {_y}"] = (_y, _m)
-            _c += 1
-        _m -= 1
-        if _m == 0:
-            _m, _y = 12, _y - 1
-
-    if rep_vista == "Gráfico evolutivo":
-        opc_periodo = [f"Año {a}" for a in anios] + ["Todo el historial", "Personalizado"]
-        per_key = "per_evolutivo"
-        _idx_def = opc_periodo.index("Todo el historial")
-    else:
-        opc_periodo = (["Este mes", "Mes anterior",
-                        "Últimos 30 días", "Últimos 60 días", "Últimos 90 días"]
-                       + list(map_meses.keys())
-                       + [f"Año {a}" for a in anios]
-                       + ["Todo el historial", "Personalizado"])
-        per_key = "per_circular"
-        _idx_def = 0
-
-    # ── Filtros ──
-    q1, q2 = st.columns(2)
-    with q1:
-        per_sel = st.selectbox("Periodo", opc_periodo, index=_idx_def, key=per_key)
-    with q2:
-        cta_r = st.selectbox("Cuenta", opc_cta,
-                             format_func=lambda x: etq_cta.get(x, x), key="cta_resumen")
-
-    if rep_vista == "Gráfico circular":
-        q3, q4 = st.columns(2)
-        with q3:
-            proy_r = st.selectbox("Proyecto", opc_proy, key="proy_resumen")
-        with q4:
-            tipo_r = st.selectbox("Tipo", ["Egreso", "Ingreso"], key="tipo_resumen")
-    else:
-        # En el evolutivo, Proyecto y Tipo no aplican (los modos ya separan
-        # ingresos/egresos y la vista es de tendencia, no puntual).
-        proy_r = "Todos"
-        tipo_r = "Egreso"
-
-    if per_sel == "Personalizado":
-        _g = st.session_state.get("rango_rep", (hoy - timedelta(days=30), hoy))
-        _rango = st.date_input("Rango de fechas", value=_g,
-                               min_value=fecha_min, max_value=fecha_max,
-                               format="DD/MM/YYYY", key="cal_rep")
-        if isinstance(_rango, tuple) and len(_rango) == 2:
-            st.session_state["rango_rep"] = _rango
-
-    if cta_r.startswith("──"):
-        cta_r = "Todas"
-
-    # ── Rango del periodo y su comparativo ──
-    pri_mes = hoy.replace(day=1)
-    fin_ant = pri_mes - timedelta(days=1)
-    ini_ant = fin_ant.replace(day=1)
-
-    def _rango_mes(y, m):
-        ini = datetime(y, m, 1).date()
-        fin = datetime(y, m, calendar.monthrange(y, m)[1]).date()
-        if y == hoy.year and m == hoy.month:
-            fin = hoy
-        return ini, fin
-
-    es_mes_curso = False
-    if per_sel == "Este mes":
-        d_ini, d_fin = pri_mes, hoy
-        a_ini, a_fin = ini_ant, fin_ant
-        lbl_ant = MESES_C[ini_ant.month]
-        gran_def = "Mensual"
-        es_mes_curso = True
-    elif per_sel == "Mes anterior":
-        d_ini, d_fin = ini_ant, fin_ant
-        prev_fin = ini_ant - timedelta(days=1)
-        a_ini, a_fin = prev_fin.replace(day=1), prev_fin
-        lbl_ant = MESES_C[a_ini.month]
-        gran_def = "Mensual"
-    elif per_sel in ("Últimos 30 días", "Últimos 60 días", "Últimos 90 días"):
-        ndias = int(per_sel.split()[1])
-        d_ini, d_fin = hoy - timedelta(days=ndias), hoy
-        a_fin = d_ini - timedelta(days=1)
-        a_ini = a_fin - timedelta(days=ndias)
-        lbl_ant = f"{ndias}d previos"
-        gran_def = "Mensual"
-    elif per_sel in map_meses:
-        y, m = map_meses[per_sel]
-        d_ini, d_fin = _rango_mes(y, m)
-        pm = datetime(y, m, 1).date() - timedelta(days=1)
-        a_ini, a_fin = pm.replace(day=1), pm
-        lbl_ant = MESES_C[pm.month]
-        gran_def = "Mensual"
-        es_mes_curso = (y == hoy.year and m == hoy.month)
-    elif per_sel.startswith("Año"):
-        anio = int(per_sel.split()[1])
-        d_ini, d_fin = datetime(anio, 1, 1).date(), datetime(anio, 12, 31).date()
-        a_ini, a_fin = datetime(anio - 1, 1, 1).date(), datetime(anio - 1, 12, 31).date()
-        lbl_ant = str(anio - 1)
-        gran_def = "Mensual"
-    elif per_sel == "Personalizado":
-        g = st.session_state.get("rango_rep", (hoy - timedelta(days=30), hoy))
-        d_ini, d_fin = g[0], g[1]
-        a_ini, a_fin = None, None
-        lbl_ant = ""
-        gran_def = "Anual" if (d_fin - d_ini).days > 366 else "Mensual"
-    else:  # Todo el historial
-        d_ini, d_fin = fecha_min, fecha_max
-        a_ini, a_fin = None, None
-        lbl_ant = ""
-        gran_def = "Anual"
-
-    # ── Base filtrada ──
-    dfr = mov.copy()
-    if cta_r != "Todas":
-        dfr = dfr[dfr["Cuenta Nombre"] == cta_r]
-    elif solo_act_r:
-        vis = set(ctar["Nombre Cuenta"].astype(str).str.strip())
-        dfr = dfr[dfr["Cuenta Nombre"].isin(vis)]
-    if proy_r != "Todos":
-        dfr = dfr[dfr["Proyecto Nombre"] == proy_r]
-
-    real = dfr[dfr["Tipo"] != "Transferencia"]
-
-    act = real[(real["Fecha"].dt.date >= d_ini) & (real["Fecha"].dt.date <= d_fin)]
-    if a_ini:
-        ant = real[(real["Fecha"].dt.date >= a_ini) & (real["Fecha"].dt.date <= a_fin)]
-    else:
-        ant = real.iloc[0:0]
-
-    ing = act[act["Monto Neto"] > 0]["Monto Neto"].sum()
-    egr = abs(act[act["Monto Neto"] < 0]["Monto Neto"].sum())
-    ing_a = ant[ant["Monto Neto"] > 0]["Monto Neto"].sum()
-    egr_a = abs(ant[ant["Monto Neto"] < 0]["Monto Neto"].sum())
-    ahorro = ing - egr
-    pct_ahorro = (ahorro / ing * 100) if ing > 0 else 0
-
-    def delta(actual, anterior, invertir=False):
-        if anterior == 0 or not lbl_ant:
-            return '<div class="kpi-delta gris">sin comparativo</div>'
-        p = (actual - anterior) / anterior * 100
-        sube = p >= 0
-        bueno = (not sube) if invertir else sube
-        clase = "pos" if bueno else "neg"
-        fl = "▲" if sube else "▼"
-        return (f'<div class="kpi-delta {clase}">{fl} {abs(p):.0f}% '
-                f'vs {lbl_ant}</div>')
-
-    # ── Total del tipo seleccionado (para KPIs del circular) ──
-    tot_tipo = egr if tipo_r == "Egreso" else ing
-    tot_tipo_ant = egr_a if tipo_r == "Egreso" else ing_a
-
-    # ── Filtro de categoría: un solo desplegable compacto, arriba de los KPIs ──
-    cat_activa = None
-    if rep_vista == "Gráfico circular":
-        _sig_c = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
-        _bc = act[_sig_c].copy()
-        _bc["_abs"] = _bc["Monto Neto"].abs()
-        _catord = _bc.groupby("Cat Nombre")["_abs"].sum().sort_values(ascending=False)
-        cat_opts = ["Todas"] + [c for c in _catord.index
-                                if str(c).strip() and str(c) != "nan"]
-        if st.session_state.get("cat_filtro") not in cat_opts:
-            st.session_state["cat_filtro"] = "Todas"
-        _csel = st.selectbox("Filtrar por categoría", cat_opts, key="cat_filtro")
-        cat_activa = None if _csel == "Todas" else _csel
-
-    sub_cat = sub_cat_ant = None
-    if cat_activa:
-        _sig = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
-        sub_cat = act[(act["Cat Nombre"] == cat_activa) & _sig]
-        if sub_cat.empty:
-            cat_activa = None
-        else:
-            _siga = (ant["Monto Neto"] < 0) if tipo_r == "Egreso" else (ant["Monto Neto"] > 0)
-            sub_cat_ant = ant[(ant["Cat Nombre"] == cat_activa) & _siga]
-
-    if rep_vista == "Gráfico evolutivo":
-        # Resumen del periodo, sin depender del Tipo (los modos ya lo separan)
-        n_mov = len(act)
-        cls_ah = "pos" if ahorro >= 0 else "neg"
-        k1, k2 = st.columns(2)
-        with k1:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
-                f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>'
-                f'{delta(ing, ing_a)}</div>', unsafe_allow_html=True)
-        with k2:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Egresos</div>'
-                f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
-                f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
-        k3, k4 = st.columns(2)
-        with k3:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Neto</div>'
-                f'<div class="kpi-val {cls_ah}">S/ {fmt0(ahorro)}</div>'
-                f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
-                unsafe_allow_html=True)
-        with k4:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
-                f'<div class="kpi-val">{n_mov}</div>'
-                f'<div class="kpi-delta gris">en el periodo</div></div>',
-                unsafe_allow_html=True)
-    elif cat_activa:
-        # KPIs de la categoría seleccionada
-        tot_cat = abs(sub_cat["Monto Neto"].sum())
-        tot_cat_ant = abs(sub_cat_ant["Monto Neto"].sum()) if sub_cat_ant is not None else 0
-        pct_cat = (tot_cat / tot_tipo * 100) if tot_tipo else 0
-        n_cat = len(sub_cat)
-        ticket = tot_cat / n_cat if n_cat else 0
-        et_tipo = "los egresos" if tipo_r == "Egreso" else "los ingresos"
-        lab_g = "Gasto" if tipo_r == "Egreso" else "Ingreso"
-        cls_c = "neg" if tipo_r == "Egreso" else "pos"
-
-        k1, k2 = st.columns(2)
-        with k1:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">{lab_g} en {cat_activa}</div>'
-                f'<div class="kpi-val {cls_c}">S/ {fmt0(tot_cat)}</div>'
-                f'{delta(tot_cat, tot_cat_ant, invertir=(tipo_r == "Egreso"))}</div>',
-                unsafe_allow_html=True)
-        with k2:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">% del total</div>'
-                f'<div class="kpi-val">{pct_cat:.0f}%</div>'
-                f'<div class="kpi-delta gris">de {et_tipo} del periodo</div></div>',
-                unsafe_allow_html=True)
-        k3, k4 = st.columns(2)
-        with k3:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
-                f'<div class="kpi-val">{n_cat}</div>'
-                f'<div class="kpi-delta gris">en el periodo</div></div>',
-                unsafe_allow_html=True)
-        with k4:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ticket promedio</div>'
-                f'<div class="kpi-val">S/ {fmt0(ticket)}</div>'
-                f'<div class="kpi-delta gris">por movimiento</div></div>',
-                unsafe_allow_html=True)
-    else:
-        # KPIs del tipo seleccionado (sin proyección)
-        et = "Egresos" if tipo_r == "Egreso" else "Ingresos"
-        cls_t = "neg" if tipo_r == "Egreso" else "pos"
-        _sig_t = (act["Monto Neto"] < 0) if tipo_r == "Egreso" else (act["Monto Neto"] > 0)
-        n_tipo = int(_sig_t.sum())
-        ticket_t = tot_tipo / n_tipo if n_tipo else 0
-
-        k1, k2, k3 = st.columns(3)
-        with k1:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">{et}</div>'
-                f'<div class="kpi-val {cls_t}">S/ {fmt0(tot_tipo)}</div>'
-                f'{delta(tot_tipo, tot_tipo_ant, invertir=(tipo_r == "Egreso"))}</div>',
-                unsafe_allow_html=True)
-        with k2:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Movimientos</div>'
-                f'<div class="kpi-val">{n_tipo}</div>'
-                f'<div class="kpi-delta gris">en el periodo</div></div>',
-                unsafe_allow_html=True)
-        with k3:
-            st.markdown(
-                f'<div class="kpi"><div class="kpi-label">Ticket prom.</div>'
-                f'<div class="kpi-val">S/ {fmt0(ticket_t)}</div>'
-                f'<div class="kpi-delta gris">por movimiento</div></div>',
-                unsafe_allow_html=True)
-
-    if rep_vista == "Gráfico evolutivo":
-        # ══════════════════════════════════════
-        # EVOLUTIVO
-        # ══════════════════════════════════════
-
-        modo_evo = st.segmented_control(
-            "Modo", ["Ingresos vs egresos", "Egresos por categoría",
-                     "Ingresos por categoría"],
-            default="Ingresos vs egresos", key="modo_evo",
-            label_visibility="collapsed")
-        modo_evo = modo_evo or "Ingresos vs egresos"
-
-        # Categoría (solo en modos por categoría) + granularidad
-        cat_evo = "Todas"
-        if modo_evo == "Ingresos vs egresos":
-            gcol = st.columns([3, 1.4])[1]
-            with gcol:
-                gran = st.selectbox("Ver por", ["Mensual", "Anual"],
-                                    index=0 if gran_def == "Mensual" else 1,
-                                    key="gran_evo", label_visibility="collapsed")
-        else:
-            _sig_e = (real["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
-                else (real["Monto Neto"] > 0)
-            _cats = real[_sig_e].groupby("Cat Nombre")["Monto Neto"].sum().abs()
-            _cats = _cats[_cats > 0].sort_values(ascending=False)
-            ce1, ce2 = st.columns([3, 1.4])
-            with ce1:
-                cat_evo = st.selectbox("Categoría", ["Todas"] + list(_cats.index),
-                                       key="cat_evo", label_visibility="collapsed")
-            with ce2:
-                gran = st.selectbox("Ver por", ["Mensual", "Anual"],
-                                    index=0 if gran_def == "Mensual" else 1,
-                                    key="gran_evo", label_visibility="collapsed")
-
-        # Excluir del gráfico (evita que un gasto único grande distorsione)
-        if modo_evo != "Ingresos vs egresos" and cat_evo != "Todas":
-            dim_excl_e = "Sub Nombre"
-            _poole = real[real["Cat Nombre"] == cat_evo]
-        else:
-            dim_excl_e = "Cat Nombre"
-            _poole = real
-        opts_excl_e = sorted({str(x) for x in _poole[dim_excl_e].dropna()
-                              if str(x).strip() and str(x) != "nan"})
-        excl_e = st.multiselect("Excluir del gráfico", opts_excl_e, key="excl_evo")
-        real_e = real[~real[dim_excl_e].astype(str).isin(excl_e)] if excl_e else real
-
-        # Cubos de tiempo (claves + etiquetas)
-        if gran == "Mensual":
-            if per_sel.startswith("Año"):
-                anio = int(per_sel.split()[1])
-                claves = [pd.Period(f"{anio}-{m:02d}", freq="M") for m in range(1, 13)]
-            elif per_sel == "Todo el historial":
-                claves = sorted(real_e["Periodo"].unique())[-24:]
-            else:
-                fin_p = pd.Period(d_fin, freq="M")
-                claves = [fin_p - i for i in range(11, -1, -1)]
-            etq = [f"{MESES_C[p.month]} {str(p.year)[2:]}" for p in claves]
-            col_bucket = real_e["Periodo"]
-        else:
-            claves = sorted(real_e["Fecha"].dt.year.unique())
-            etq = [str(a) for a in claves]
-            col_bucket = real_e["Fecha"].dt.year
-
-        COLS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
-                "#008300", "#4a3aa7", "#e34948"]
-
-        if modo_evo == "Ingresos vs egresos":
-            st.markdown('<div class="sub">Ingresos vs egresos</div>',
-                        unsafe_allow_html=True)
-            vi, ve, va = [], [], []
-            for k in claves:
-                d = real_e[col_bucket == k]
-                i_ = d[d["Monto Neto"] > 0]["Monto Neto"].sum()
-                e_ = abs(d[d["Monto Neto"] < 0]["Monto Neto"].sum())
-                vi.append(i_)
-                ve.append(e_)
-                va.append(i_ - e_)
-            fig = go.Figure()
-            fig.add_bar(x=etq, y=vi, name="Ingresos", marker_color="#1baf7a")
-            fig.add_bar(x=etq, y=ve, name="Egresos", marker_color="#eb6834")
-            fig.add_scatter(x=etq, y=va, name="Neto", mode="lines+markers",
-                            line=dict(color="#2a78d6", width=2), marker=dict(size=6))
-            fig.update_layout(barmode="group")
-        else:
-            _sig_e = (real_e["Monto Neto"] < 0) if modo_evo.startswith("Egresos") \
-                else (real_e["Monto Neto"] > 0)
-            base = real_e[_sig_e].copy()
-            if cat_evo != "Todas":
-                base = base[base["Cat Nombre"] == cat_evo]
-                dim_col = "Sub Nombre"
-                titulo = f"{cat_evo} · subcategorías en el tiempo"
-            else:
-                dim_col = "Cat Nombre"
-                titulo = f"{modo_evo} en el tiempo"
-            st.markdown(f'<div class="sub">{titulo}</div>', unsafe_allow_html=True)
-
-            base["_k"] = base[dim_col].apply(
-                lambda s: s if (str(s).strip() and str(s) != "nan") else "(sin dato)")
-            base["_b"] = base["Periodo"] if gran == "Mensual" else base["Fecha"].dt.year
-            tot_by = base.groupby("_k")["Monto Neto"].sum().abs().sort_values(ascending=False)
-            top_series = list(tot_by.index[:6])
-            otros_series = list(tot_by.index[6:])
-
-            fig = go.Figure()
-            if not top_series:
-                st.info("No hay datos para este modo en el periodo.")
-            for i, s in enumerate(top_series):
-                serie = base[base["_k"] == s].groupby("_b")["Monto Neto"].sum().abs()
-                ys = [float(serie.get(k, 0)) for k in claves]
-                fig.add_bar(x=etq, y=ys, name=str(s)[:18],
-                            marker_color=COLS[i % len(COLS)])
-            if otros_series:
-                s_o = base[base["_k"].isin(otros_series)].groupby("_b")["Monto Neto"].sum().abs()
-                ys_o = [float(s_o.get(k, 0)) for k in claves]
-                fig.add_bar(x=etq, y=ys_o, name="Otros", marker_color="#b9bec4")
-            # apiladas = composición por periodo
-            fig.update_layout(barmode="stack")
-
-        fig.update_layout(
-            height=300, margin=dict(l=0, r=0, t=8, b=64),
-            legend=dict(orientation="h", yanchor="top", y=-0.22, x=0,
-                        font=dict(size=11)),
-            hovermode="x unified", yaxis_title="", xaxis_title="",
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-
-    if rep_vista == "Gráfico circular":
-        # ══════════════════════════════════════
-        # PIE POR CATEGORÍA
-        # ══════════════════════════════════════
-
-        if tipo_r == "Egreso":
-            sel = act[act["Monto Neto"] < 0].copy()
-            sel_ant = ant[ant["Monto Neto"] < 0].copy()
-            base_lbl = "Egresos"
-        else:
-            sel = act[act["Monto Neto"] > 0].copy()
-            sel_ant = ant[ant["Monto Neto"] > 0].copy()
-            base_lbl = "Ingresos"
-
-        # Excluir categorías/subcategorías del gráfico (para que un gasto único
-        # grande —ej. un carro— no distorsione la composición).
-        dim_excl = "Sub Nombre" if cat_activa else "Cat Nombre"
-        _pool = sel[sel["Cat Nombre"] == cat_activa] if cat_activa else sel
-        opts_excl = sorted({str(x) for x in _pool[dim_excl].dropna()
-                            if str(x).strip() and str(x) != "nan"})
-        excl = st.multiselect(
-            "Excluir del gráfico", opts_excl,
-            key="excl_" + (f"sub_{cat_activa}" if cat_activa else "cat"))
-        if excl:
-            sel = sel[~sel[dim_excl].astype(str).isin(excl)]
-            sel_ant = sel_ant[~sel_ant[dim_excl].astype(str).isin(excl)]
-
-        # Composición por categoría (se conserva para el % del total en el detalle)
-        por_cat = sel.groupby("Cat Nombre")["Monto Neto"].sum().abs()
-        por_cat = por_cat[por_cat > 0].sort_values(ascending=False)
-
-        # Dimensión de la torta: por categoría (Todas) o por subcategoría (al filtrar)
-        if cat_activa:
-            dim_col = "Sub Nombre"
-            base_pie = sel[sel["Cat Nombre"] == cat_activa].copy()
-            base_pie_ant = sel_ant[sel_ant["Cat Nombre"] == cat_activa].copy()
-            titulo_pie = f"{cat_activa} · por subcategoría"
-            var_titulo = f"Subcategorías vs {lbl_ant}"
-        else:
-            dim_col = "Cat Nombre"
-            base_pie = sel
-            base_pie_ant = sel_ant
-            titulo_pie = f"{base_lbl} por categoría"
-            var_titulo = f"Variación vs {lbl_ant}"
-
-        st.markdown(f'<div class="sub">{titulo_pie}</div>', unsafe_allow_html=True)
-
-        if len(base_pie) == 0:
-            st.info("No hay movimientos de este tipo en el periodo seleccionado.")
-        else:
-            def _agg(df):
-                g = df.copy()
-                g["_k"] = g[dim_col].apply(
-                    lambda s: s if (str(s).strip() and str(s) != "nan") else "(sin dato)")
-                r = g.groupby("_k")["Monto Neto"].sum().abs()
-                return r[r > 0].sort_values(ascending=False)
-
-            por_pie = _agg(base_pie)
-
-            COLORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
-                       "#008300", "#4a3aa7", "#e34948", "#888780"]
-
-            if len(por_pie) > 9:
-                top = por_pie.head(8)
-                otros = por_pie.iloc[8:].sum()
-                etiquetas_pie = list(top.index) + ["Otros"]
-                valores_pie = list(top.values) + [otros]
-            else:
-                etiquetas_pie = list(por_pie.index)
-                valores_pie = list(por_pie.values)
-
-            figp = go.Figure(go.Pie(
-                labels=etiquetas_pie, values=valores_pie, hole=0.45,
-                marker=dict(colors=COLORES[:len(etiquetas_pie)],
-                            line=dict(color="#ffffff", width=2)),
-                textinfo="percent", textposition="inside",
-                hovertemplate="%{label}<br>S/ %{value:,.2f} (%{percent})<extra></extra>",
-                sort=True,
-            ))
-            figp.update_layout(
-                height=340, margin=dict(l=0, r=0, t=6, b=0),
-                legend=dict(orientation="v", x=1, y=0.5, font=dict(size=11)),
-                annotations=[dict(
-                    text=f"S/ {fmt0(por_pie.sum())}", x=0.5, y=0.5,
-                    font=dict(size=15), showarrow=False,
-                )],
-            )
-            st.plotly_chart(figp, use_container_width=True)
-            cap_pie = ("Composición de la categoría filtrada." if cat_activa
-                       else "La torta es referencial; para filtrar usa el desplegable de arriba.")
-            if excl:
-                cap_pie += f" · Excluyendo: {', '.join(excl)} (no afecta los KPIs de arriba)"
-            st.caption(cap_pie)
-
-            # ── Variación vs periodo anterior (misma dimensión que la torta) ──
-            if len(base_pie_ant) > 0 and lbl_ant:
-                a_ = por_pie
-                b_ = _agg(base_pie_ant)
-                var = a_.subtract(b_, fill_value=0).sort_values(ascending=False)
-                var = var[var.abs() > 0.5].head(8)
-                if len(var) > 0:
-                    st.markdown(f'<div class="sub">{var_titulo}</div>',
-                                unsafe_allow_html=True)
-                    filas = []
-                    for c, v in var.items():
-                        malo = (v > 0) if tipo_r == "Egreso" else (v < 0)
-                        cl = "neg" if malo else "pos"
-                        sg = "+" if v > 0 else "−"
-                        filas.append(
-                            f'<div class="var-row"><span>{c}</span>'
-                            f'<span class="var-monto {cl}">{sg}S/ {fmt0(abs(v))}</span></div>')
-                    st.markdown("".join(filas), unsafe_allow_html=True)
-
-            # ══════════════════════════════════
-            # DETALLE POR CATEGORÍA
-            # ══════════════════════════════════
-
-            st.markdown('<div class="sub">Ver detalle</div>', unsafe_allow_html=True)
-
-            if not cat_activa:
-                st.caption("Elige una categoría en el filtro de arriba para ver su detalle.")
-            else:
-                dim = st.radio(
-                    "Ver por", ["Subcategoría", "Beneficiario", "Movimientos"],
-                    horizontal=True, label_visibility="collapsed", key="dim_detalle",
-                )
-                cat_det = cat_activa
-                det = sel[sel["Cat Nombre"] == cat_det].copy()
-                total_det = abs(det["Monto Neto"].sum())
-                pct_det = total_det / por_cat.sum() * 100 if por_cat.sum() else 0
-
-                st.markdown(
-                    f'<div class="fila-orden"><b>{cat_det}</b> · {len(det)} movimientos · '
-                    f'S/ {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
-                    unsafe_allow_html=True)
-                if dim in ("Subcategoría", "Beneficiario"):
-                    campo = "Sub Nombre" if dim == "Subcategoría" else "Desc"
-                    gr = det.groupby(campo)["Monto Neto"].sum().abs()
-                    gr = gr[gr > 0].sort_values(ascending=True).tail(10)
-                    gr.index = [
-                        (s if s and str(s) != "nan" else "(sin dato)") for s in gr.index
-                    ]
-
-                    if len(gr) > 0:
-                        figd = go.Figure(go.Bar(
-                            x=gr.values, y=gr.index, orientation="h",
-                            marker_color="#2a78d6",
-                            hovertemplate="S/ %{x:,.2f}<extra></extra>",
-                        ))
-                        figd.update_layout(
-                            height=max(180, 32 * len(gr)),
-                            margin=dict(l=0, r=0, t=6, b=0),
-                            xaxis_title="", yaxis_title="",
-                        )
-                        st.plotly_chart(figd, use_container_width=True)
-                else:
-                    movs = det.sort_values("Fecha", ascending=False).head(15)
-                    html = []
-                    for _, r in movs.iterrows():
-                        sg = "pos" if r["Monto Neto"] >= 0 else "neg"
-                        mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
-                        sb = r["Sub Nombre"] if str(r["Sub Nombre"]) not in ("nan", "") else ""
-                        pie_txt = f'{r["Fecha"].strftime("%d/%m/%Y")} · {r["Cuenta Nombre"]}'
-                        if sb:
-                            pie_txt += f' · {sb}'
-                        html.append(
-                            f'<div class="mov-row"><div class="mov-izq">'
-                            f'<span class="mov-desc">{r["Desc"]}</span>'
-                            f'<span class="mov-cat">{pie_txt}</span></div>'
-                            f'<div class="mov-der"><span class="mov-monto {sg}">{mt}</span>'
-                            f'</div></div>')
-                    st.markdown("".join(html), unsafe_allow_html=True)
-
-                    if len(det) > 15:
-                        st.caption(f"Mostrando 15 de {len(det)} movimientos")
-
-    # ══════════════════════════════════════
-    # PENDIENTES Y PROYECTOS (solo en el reporte circular)
-    # ══════════════════════════════════════
-
-    if rep_vista == "Gráfico circular":
-        p1, p2 = st.columns(2)
-
-        with p1:
-            if "Estado" in dfr.columns:
-                pend = dfr[dfr["Estado"].astype(str).str.strip() == "Pendiente regularizar"]
-            else:
-                pend = dfr.iloc[0:0]
-            total_p = abs(pend["Monto Neto"].sum()) if len(pend) > 0 else 0
-            filas = []
-            for _, r in pend.sort_values("Fecha", ascending=False).head(4).iterrows():
-                filas.append(
-                    f'<div class="card-row"><span class="gris">{str(r["Desc"])[:22]}</span>'
-                    f'<span>S/ {fmt0(abs(r["Monto Neto"]))}</span></div>')
-            if len(pend) > 0:
-                dias = (hoy - pend["Fecha"].min().date()).days
-                nota = f'{len(pend)} gastos · el más antiguo hace {dias} días'
-            else:
-                nota = "No hay gastos pendientes"
-            st.markdown(
-                f'<div class="card"><div class="card-tit">⚠️ Pendiente de regularizar</div>'
-                f'<div class="card-val neg">S/ {fmt0(total_p)}</div>'
-                f'{"".join(filas)}<div class="card-nota">{nota}</div></div>',
-                unsafe_allow_html=True)
-
-        with p2:
-            bloques = []
-            if not proyectos.empty:
-                c_est = buscar_col(proyectos, ["Estado"])
-                c_nom = buscar_col(proyectos, ["Nombre Proyecto", "Nombre"])
-                c_pre = buscar_col(proyectos, ["Presupuesto PEN", "Presupuesto"])
-                pr = proyectos.copy()
-                if c_est and solo_act_r:
-                    pr = pr[pr[c_est].astype(str).str.strip().str.lower().isin(ACTIVOS)]
-                if c_nom:
-                    if c_pre:
-                        pr[c_pre] = a_numero(pr[c_pre])
-                    for _, r in pr.head(4).iterrows():
-                        nom = str(r[c_nom]).strip()
-                        pres = float(r[c_pre]) if c_pre else 0.0
-                        gasto = abs(mov[(mov["Proyecto Nombre"] == nom) &
-                                        (mov["Monto Neto"] < 0)]["Monto Neto"].sum())
-                        if pres > 0:
-                            pct = gasto / pres * 100
-                            color = "#1baf7a" if pct < 70 else ("#eda100" if pct < 90 else "#d03b3b")
-                            bloques.append(
-                                f'<div class="proy-lbl"><span>{nom[:22]}</span>'
-                                f'<span class="gris">{pct:.0f}%</span></div>'
-                                f'<div class="barra-bg"><div class="barra-fill" '
-                                f'style="width:{min(pct, 100)}%;background:{color};"></div></div>'
-                                f'<div class="proy-nota">Gastado S/ {fmt0(gasto)} '
-                                f'de S/ {fmt0(pres)} de presupuesto</div>')
-                        else:
-                            bloques.append(
-                                f'<div class="proy-lbl"><span>{nom[:22]}</span>'
-                                f'<span class="gris">sin ppto.</span></div>'
-                                f'<div class="proy-nota">Gastado S/ {fmt0(gasto)} · '
-                                f'sin presupuesto cargado</div>')
-            if not bloques:
-                bloques = ['<div class="card-nota">No hay proyectos activos</div>']
-            st.markdown(
-                f'<div class="card"><div class="card-tit">📁 Proyectos activos</div>'
-                f'<div class="card-nota" style="margin:-2px 0 8px">'
-                f'Gasto acumulado vs presupuesto</div>'
-                f'{"".join(bloques)}</div>', unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════
-# VISTA: CONCILIACIÓN
-# ══════════════════════════════════════════
-
-if vista == "Conciliación":
-    conciliacion.render(mov, cuentas, conectar_sheets, SHEET_ID)
+      
