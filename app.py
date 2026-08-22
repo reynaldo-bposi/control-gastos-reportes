@@ -226,9 +226,38 @@ if mov.empty:
 mov["Fecha"] = pd.to_datetime(mov["Fecha"], dayfirst=True, errors="coerce")
 mov["Monto"] = a_numero(mov["Monto"])
 mov["Monto Neto"] = a_numero(mov["Monto Neto"])
+
+# Monto neto equivalente en soles (para netos cuando se mezclan monedas).
+# Se toma de una columna del sheet (p. ej. "Monto Soles"/"Monto PEN") si existe.
+_col_soles = buscar_col(mov, ["Monto Neto Soles", "Monto Neto PEN", "Monto Soles",
+                              "Monto en Soles", "Monto PEN", "Monto S/.", "Monto S/"])
+if _col_soles:
+    _s = a_numero(mov[_col_soles])
+    if (_s.dropna() < 0).any():
+        _conv = _s                                   # ya viene con signo
+    else:
+        _signo = mov["Monto Neto"].apply(lambda x: -1 if x < 0 else 1)
+        _conv = _s.abs() * _signo                    # magnitud -> aplicar signo
+    mov["_neto_soles"] = _conv.fillna(mov["Monto Neto"])
+    HAY_SOLES_COL = True
+else:
+    mov["_neto_soles"] = mov["Monto Neto"]
+    HAY_SOLES_COL = False
 mov = mov.dropna(subset=["Fecha"])
 
 cuentas["Saldo Inicial"] = a_numero(cuentas["Saldo Inicial"])
+
+# Moneda por cuenta (global): "USD" o "PEN"
+def _es_usd_glob(m):
+    m = str(m).upper()
+    return any(k in m for k in ("USD", "DOL", "US$", "$"))
+
+_col_mon_g = buscar_col(cuentas, ["Moneda"])
+MONEDA_CUENTA = {}
+if _col_mon_g:
+    for _, _rc in cuentas.iterrows():
+        MONEDA_CUENTA[str(_rc["Nombre Cuenta"]).strip()] = \
+            "USD" if _es_usd_glob(_rc[_col_mon_g]) else "PEN"
 
 d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
@@ -451,38 +480,28 @@ if vista == "Movimientos":
     if tipo_sel != "Todos":
         base = base[base["Tipo"] == tipo_sel]
 
-    # Saldo inicial base: solo cuando NO hay filtros de subconjunto
     subset_filter = (proyecto_sel != "Todos") or (perfil_sel != "Todos") \
         or (tipo_sel != "Todos")
-    if subset_filter:
-        base_ini = 0.0
-    elif varias_ctas:
-        base_ini = float(cuentas[
-            cuentas["Nombre Cuenta"].astype(str).str.strip().isin(cuentas_incl)
-        ]["Saldo Inicial"].sum())
-    else:
-        base_ini = 0.0
-        ids = [k for k, v in d_cuentas.items() if v == cuenta_sel]
-        if ids:
-            fila = cuentas[cuentas["ID"].astype(str).str.strip() == ids[0]]
-            if not fila.empty:
-                base_ini = float(fila["Saldo Inicial"].iloc[0])
 
-    # Saldo corriente sobre el conjunto YA filtrado, con arrastre previo a 'desde'
+    # Al mezclar monedas, el saldo/neto se calcula en soles (dólares convertidos).
+    mezcla = not mono_moneda
+    val_col = "_neto_soles" if mezcla else "Monto Neto"
+    sim_saldo = "S/" if mezcla else simbolo
+
+    # Saldo corriente SOLO sobre lo mostrado: arranca desde la primera
+    # transacción del filtro (incluida la fecha), sin arrastre ni saldo inicial.
     base = base.sort_values(["Fecha", "_RowNumber"], ascending=[True, True])
-    carry = base[base["Fecha"].dt.date < desde]["Monto Neto"].sum()
-    saldo_inicial = base_ini + carry
     df = base[(base["Fecha"].dt.date >= desde) & (base["Fecha"].dt.date <= hasta)].copy()
-    df["Saldo Cierre"] = saldo_inicial + df["Monto Neto"].cumsum()
+    df["Saldo Cierre"] = df[val_col].cumsum()
 
     if "desc" not in st.session_state:
         st.session_state.desc = True
 
-    ingresos = df[df["Monto Neto"] > 0]["Monto Neto"].sum()
-    egresos = df[df["Monto Neto"] < 0]["Monto Neto"].sum()
-    saldo_actual = base_ini + base[base["Fecha"].dt.date <= hasta]["Monto Neto"].sum()
+    ingresos = df[df[val_col] > 0][val_col].sum()
+    egresos = df[df[val_col] < 0][val_col].sum()
+    saldo_actual = df[val_col].sum()
 
-    etiqueta_saldo = "Neto (filtrado)" if subset_filter else "Saldo actual"
+    etiqueta_saldo = "Neto (filtrado)" if subset_filter else "Saldo acumulado"
 
     k1, k2 = st.columns(2)
     with k1:
@@ -494,17 +513,16 @@ if vista == "Movimientos":
         )
     with k2:
         clase = "pos" if saldo_actual >= 0 else "neg"
-        if mono_moneda:
-            val_saldo = f'{simbolo} {fmt(saldo_actual)}'
-            et_s = etiqueta_saldo
-        else:
-            val_saldo = "varias monedas"
-            et_s = "Saldo"
         st.markdown(
-            f'<div class="kpi"><div class="kpi-label">{et_s}</div>'
-            f'<div class="kpi-val {clase}">{val_saldo}</div></div>',
+            f'<div class="kpi"><div class="kpi-label">{etiqueta_saldo}</div>'
+            f'<div class="kpi-val {clase}">{sim_saldo} {fmt(saldo_actual)}</div></div>',
             unsafe_allow_html=True,
         )
+    if mezcla:
+        nota_mon = ("Estás sumando soles y dólares: los importes en dólares se "
+                    "convirtieron a soles" + ("." if HAY_SOLES_COL else
+                    " (falta la columna de monto en soles, se sumaron sin convertir)."))
+        st.caption("⚠️ " + nota_mon)
 
     r1, r2 = st.columns([5, 1.5])
     with r1:
@@ -538,8 +556,8 @@ if vista == "Movimientos":
         sim_r = "US$" if cta_moneda.get(str(r["Cuenta Nombre"]).strip()) == "USD" else "S/"
         monto = f"{'+' if r['Monto Neto'] >= 0 else '-'}{sim_r} {fmt(abs(r['Monto Neto']))}"
         extra = f" · {r['Cuenta Nombre']}" if varias_ctas else ""
-        saldo_html = (f'<span class="mov-saldo">Saldo: {simbolo} '
-                      f'{fmt(r["Saldo Cierre"])}</span>') if mono_moneda else ""
+        saldo_html = (f'<span class="mov-saldo">Saldo: {sim_saldo} '
+                      f'{fmt(r["Saldo Cierre"])}</span>')
         html.append(
             f'<div class="mov-row">'
             f'<div class="mov-izq">'
@@ -748,13 +766,29 @@ elif vista == "Reportes":
     dfr = mov.copy()
     if cta_r != "Todas":
         dfr = dfr[dfr["Cuenta Nombre"] == cta_r]
+        _incl_r = {cta_r}
     elif solo_act_r:
         vis = set(ctar["Nombre Cuenta"].astype(str).str.strip())
         dfr = dfr[dfr["Cuenta Nombre"].isin(vis)]
+        _incl_r = vis
+    else:
+        _incl_r = set(dfr["Cuenta Nombre"].astype(str).str.strip())
     if proy_r != "Todos":
         dfr = dfr[dfr["Proyecto Nombre"] == proy_r]
 
+    # Moneda de la vista: si mezcla soles y dólares -> solarizar (usar Monto PEN)
+    _monedas_r = {MONEDA_CUENTA.get(str(c).strip(), "PEN") for c in _incl_r}
+    mezcla_r = len(_monedas_r) > 1
+    sr = "US$" if (not mezcla_r and _monedas_r == {"USD"}) else "S/"
+    dfr = dfr.copy()
+    if mezcla_r:
+        dfr["Monto Neto"] = dfr["_neto_soles"]
+
     real = dfr[dfr["Tipo"] != "Transferencia"]
+
+    if mezcla_r:
+        st.caption("⚠️ Estás combinando cuentas en soles y dólares: los importes "
+                   "en dólares se muestran solarizados (convertidos con su tipo de cambio).")
 
     act = real[(real["Fecha"].dt.date >= d_ini) & (real["Fecha"].dt.date <= d_fin)]
     if a_ini:
@@ -816,18 +850,18 @@ elif vista == "Reportes":
         with k1:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Ingresos</div>'
-                f'<div class="kpi-val pos">S/ {fmt0(ing)}</div>'
+                f'<div class="kpi-val pos">{sr} {fmt0(ing)}</div>'
                 f'{delta(ing, ing_a)}</div>', unsafe_allow_html=True)
         with k2:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Egresos</div>'
-                f'<div class="kpi-val neg">S/ {fmt0(egr)}</div>'
+                f'<div class="kpi-val neg">{sr} {fmt0(egr)}</div>'
                 f'{delta(egr, egr_a, invertir=True)}</div>', unsafe_allow_html=True)
         k3, k4 = st.columns(2)
         with k3:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Neto</div>'
-                f'<div class="kpi-val {cls_ah}">S/ {fmt0(ahorro)}</div>'
+                f'<div class="kpi-val {cls_ah}">{sr} {fmt0(ahorro)}</div>'
                 f'<div class="kpi-delta gris">{pct_ahorro:.0f}% de lo que entró</div></div>',
                 unsafe_allow_html=True)
         with k4:
@@ -851,7 +885,7 @@ elif vista == "Reportes":
         with k1:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">{lab_g} en {cat_activa}</div>'
-                f'<div class="kpi-val {cls_c}">S/ {fmt0(tot_cat)}</div>'
+                f'<div class="kpi-val {cls_c}">{sr} {fmt0(tot_cat)}</div>'
                 f'{delta(tot_cat, tot_cat_ant, invertir=(tipo_r == "Egreso"))}</div>',
                 unsafe_allow_html=True)
         with k2:
@@ -870,7 +904,7 @@ elif vista == "Reportes":
         with k4:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Ticket promedio</div>'
-                f'<div class="kpi-val">S/ {fmt0(ticket)}</div>'
+                f'<div class="kpi-val">{sr} {fmt0(ticket)}</div>'
                 f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
     else:
@@ -885,7 +919,7 @@ elif vista == "Reportes":
         with k1:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">{et}</div>'
-                f'<div class="kpi-val {cls_t}">S/ {fmt0(tot_tipo)}</div>'
+                f'<div class="kpi-val {cls_t}">{sr} {fmt0(tot_tipo)}</div>'
                 f'{delta(tot_tipo, tot_tipo_ant, invertir=(tipo_r == "Egreso"))}</div>',
                 unsafe_allow_html=True)
         with k2:
@@ -897,7 +931,7 @@ elif vista == "Reportes":
         with k3:
             st.markdown(
                 f'<div class="kpi"><div class="kpi-label">Ticket prom.</div>'
-                f'<div class="kpi-val">S/ {fmt0(ticket_t)}</div>'
+                f'<div class="kpi-val">{sr} {fmt0(ticket_t)}</div>'
                 f'<div class="kpi-delta gris">por movimiento</div></div>',
                 unsafe_allow_html=True)
 
@@ -1103,14 +1137,14 @@ elif vista == "Reportes":
                 marker=dict(colors=COLORES[:len(etiquetas_pie)],
                             line=dict(color="#ffffff", width=2)),
                 textinfo="percent", textposition="inside",
-                hovertemplate="%{label}<br>S/ %{value:,.2f} (%{percent})<extra></extra>",
+                hovertemplate="%{label}<br>"+sr+" %{value:,.2f} (%{percent})<extra></extra>",
                 sort=True,
             ))
             figp.update_layout(
                 height=340, margin=dict(l=0, r=0, t=6, b=0),
                 legend=dict(orientation="v", x=1, y=0.5, font=dict(size=11)),
                 annotations=[dict(
-                    text=f"S/ {fmt0(por_pie.sum())}", x=0.5, y=0.5,
+                    text=f"{sr} {fmt0(por_pie.sum())}", x=0.5, y=0.5,
                     font=dict(size=15), showarrow=False,
                 )],
             )
@@ -1137,7 +1171,7 @@ elif vista == "Reportes":
                         sg = "+" if v > 0 else "−"
                         filas.append(
                             f'<div class="var-row"><span>{c}</span>'
-                            f'<span class="var-monto {cl}">{sg}S/ {fmt0(abs(v))}</span></div>')
+                            f'<span class="var-monto {cl}">{sg}{sr} {fmt0(abs(v))}</span></div>')
                     st.markdown("".join(filas), unsafe_allow_html=True)
 
             # ══════════════════════════════════
@@ -1160,7 +1194,7 @@ elif vista == "Reportes":
 
                 st.markdown(
                     f'<div class="fila-orden"><b>{cat_det}</b> · {len(det)} movimientos · '
-                    f'S/ {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
+                    f'{sr} {fmt0(total_det)} · {pct_det:.1f}% del total</div>',
                     unsafe_allow_html=True)
                 if dim in ("Subcategoría", "Beneficiario"):
                     campo = "Sub Nombre" if dim == "Subcategoría" else "Desc"
@@ -1174,7 +1208,7 @@ elif vista == "Reportes":
                         figd = go.Figure(go.Bar(
                             x=gr.values, y=gr.index, orientation="h",
                             marker_color="#2a78d6",
-                            hovertemplate="S/ %{x:,.2f}<extra></extra>",
+                            hovertemplate=sr+" %{x:,.2f}<extra></extra>",
                         ))
                         figd.update_layout(
                             height=max(180, 32 * len(gr)),
@@ -1187,7 +1221,7 @@ elif vista == "Reportes":
                     html = []
                     for _, r in movs.iterrows():
                         sg = "pos" if r["Monto Neto"] >= 0 else "neg"
-                        mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}S/ {fmt(abs(r['Monto Neto']))}"
+                        mt = f"{'+' if r['Monto Neto'] >= 0 else '-'}{sr} {fmt(abs(r['Monto Neto']))}"
                         sb = r["Sub Nombre"] if str(r["Sub Nombre"]) not in ("nan", "") else ""
                         pie_txt = f'{r["Fecha"].strftime("%d/%m/%Y")} · {r["Cuenta Nombre"]}'
                         if sb:
