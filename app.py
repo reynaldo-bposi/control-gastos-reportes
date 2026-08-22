@@ -619,6 +619,13 @@ if vista == "Movimientos":
 
     exp["Comprobante"] = _col_or_blank(df, ["Comprobante", "Tipo Comprobante",
                                             "Tipo de Comprobante", "Tipo Doc"])
+    _fc = buscar_col(df, ["Fecha Comprobante", "Fecha del Comprobante",
+                          "Fecha Comp.", "Fecha Doc", "Fecha Documento"])
+    if _fc:
+        _fcv = pd.to_datetime(df[_fc], dayfirst=True, errors="coerce")
+        exp["Fecha Comprobante"] = _fcv.dt.strftime("%d/%m/%Y").fillna("")
+    else:
+        exp["Fecha Comprobante"] = ""
     exp["Serie"] = _col_or_blank(df, ["Serie"])
     exp["N° Doc."] = _col_or_blank(df, ["N° Doc.", "N° Doc", "Nro Doc", "N° Documento",
                                         "Nro Documento", "Número", "Numero", "Correlativo"])
