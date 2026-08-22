@@ -223,7 +223,7 @@ def conciliar(df_eecc, df_app, dias_tolerancia=5):
                 fecha=r['fecha_consumo'], comercio=r['descripcion'],
                 monto=r['monto_match'], cuenta_app=r['cuenta_app'],
                 registro_app=m['beneficiario'], fecha_app=m['fecha'],
-                match='directo', partes=None))
+                match='directo', partes=None, moneda=r.get('moneda', 'Soles')))
         else:
             pendientes.append(r)
 
@@ -276,11 +276,12 @@ def conciliar(df_eecc, df_app, dias_tolerancia=5):
                 fecha=r['fecha_consumo'], comercio=r['descripcion'],
                 monto=r['monto_match'], cuenta_app=r['cuenta_app'],
                 registro_app=ben, fecha_app=str(fch),
-                match='dividido', partes=partes))
+                match='dividido', partes=partes, moneda=r.get('moneda', 'Soles')))
         else:
             falta.append(dict(
                 fecha=r['fecha_consumo'], descripcion=r['descripcion'],
-                monto=r['monto_match'], cuenta_app=r['cuenta_app'], tipo=r['tipo']))
+                monto=r['monto_match'], cuenta_app=r['cuenta_app'],
+                tipo=r['tipo'], moneda=r.get('moneda', 'Soles')))
 
     en_app = a[~a.index.isin(usados)][
         ['fecha', 'beneficiario', 'monto', 'cuenta_app']].copy()
@@ -415,8 +416,9 @@ def _tabla_conciliados(conc):
          '<div>Registro en app</div><div>Cruce</div></div>']
     for _, row in conc.iterrows():
         partes = row.get('partes')
+        _sim = "US$" if str(row.get('moneda', 'Soles')) == 'Dolares' else "S/"
         f, com = esc(str(row['fecha'])), esc(str(row['comercio']))
-        mo, cta = _fmt(row['monto']), esc(str(row['cuenta_app']))
+        mo, cta = f"{_sim} {_fmt(row['monto'])}", esc(str(row['cuenta_app']))
         reg = esc(str(row['registro_app']))
         if isinstance(partes, list) and len(partes) >= 2:
             bdg = f'<span class="bdg bdg-d">dividido ({len(partes)})</span>'
@@ -431,7 +433,7 @@ def _tabla_conciliados(conc):
                     f'<div class="drow"><div>{esc(str(p["fecha"]))}</div>'
                     f'<div class="tw">{esc(ben_p)}</div>'
                     f'<div class="tw">{esc(cat_p)}</div>'
-                    f'<div class="mono">{_fmt(p["monto"])}</div></div>')
+                    f'<div class="mono">{_sim} {_fmt(p["monto"])}</div></div>')
             det.append('</div>')
             h.append(
                 f'<details><summary><div>{f}</div><div class="tw">{com}</div>'
@@ -566,10 +568,20 @@ def render(mov, cuentas, conectar_sheets, sheet_id):
     else:
         vista_falta = falta.rename(columns={
             'fecha': 'Fecha', 'descripcion': 'Comercio', 'monto': 'Monto',
-            'cuenta_app': 'Cuenta', 'tipo': 'Tipo'})
+            'cuenta_app': 'Cuenta', 'tipo': 'Tipo', 'moneda': 'Moneda'})
         st.dataframe(vista_falta, use_container_width=True, hide_index=True)
-        total_falta = falta['monto'].sum()
-        st.caption(f"{len(falta)} movimientos · S/ {total_falta:,.2f} sin registrar")
+        if 'moneda' in falta.columns:
+            t_sol = falta[falta['moneda'] != 'Dolares']['monto'].sum()
+            t_dol = falta[falta['moneda'] == 'Dolares']['monto'].sum()
+            partes_tot = []
+            if t_sol:
+                partes_tot.append(f"S/ {t_sol:,.2f}")
+            if t_dol:
+                partes_tot.append(f"US$ {t_dol:,.2f}")
+            tot_txt = " · ".join(partes_tot) if partes_tot else "S/ 0.00"
+        else:
+            tot_txt = f"S/ {falta['monto'].sum():,.2f}"
+        st.caption(f"{len(falta)} movimientos · {tot_txt} sin registrar")
 
         b1, b2 = st.columns(2)
         with b1:
