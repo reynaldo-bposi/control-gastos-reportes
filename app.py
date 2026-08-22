@@ -218,6 +218,9 @@ if cats.empty:
     cats = cargar_opcional("⚙️ Categorías")
 subcats = cargar_opcional("🏷️ Subcategorías")
 proyectos = cargar_opcional("📁 Proyectos")
+entidades = cargar_opcional("🏢 Entidades")
+if entidades.empty:
+    entidades = cargar_opcional("Entidades")
 
 if mov.empty:
     st.warning("No hay movimientos registrados todavía.")
@@ -264,6 +267,8 @@ d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
 d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
+d_ent = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
+             ["Nombre / Razón Social", "Razón Social", "Nombre", "Entidad"])
 
 mov["Cuenta Nombre"] = traducir(mov["Cuenta"], d_cuentas)
 if "Cuenta Destino" in mov.columns:
@@ -572,18 +577,55 @@ if vista == "Movimientos":
     st.markdown("".join(html), unsafe_allow_html=True)
 
     st.markdown("")
-    cols_exp = ["Fecha", "Cuenta Nombre", "Desc", "CatSub", "Proyecto Nombre",
-                "Monto Neto", "Saldo Cierre"]
-    cols_exp = [c for c in cols_exp if c in df.columns]
-    exportar = df[cols_exp].copy()
-    exportar["Fecha"] = exportar["Fecha"].dt.strftime("%d/%m/%Y")
-    exportar.columns = [
-        {"Cuenta Nombre": "Cuenta", "Desc": "Descripción", "CatSub": "Categoría",
-         "Proyecto Nombre": "Proyecto", "Monto Neto": "Monto",
-         "Saldo Cierre": "Saldo cierre"}.get(c, c)
-        for c in cols_exp
-    ]
-    csv = exportar.to_csv(index=False).encode("utf-8-sig")
+
+    def _col_or_blank(d, cands):
+        c = buscar_col(d, cands)
+        return d[c] if c else pd.Series("", index=d.index)
+
+    exp = pd.DataFrame(index=df.index)
+    exp["Fecha"] = df["Fecha"].dt.strftime("%d/%m/%Y")
+    exp["Cuenta"] = df.get("Cuenta Nombre", "")
+    exp["Descripción"] = df.get("Desc", "")
+    exp["Categoría"] = df.get("Cat Nombre", "")
+    exp["Proyecto"] = df.get("Proyecto Nombre", "")
+    exp["Tipo Mov."] = df.get("Tipo", "")
+    exp["Perfil"] = _col_or_blank(df, ["Perfil"])
+    _ent = buscar_col(df, ["Entidad", "Entidades", "Entidad Nombre",
+                           "Nombre / Razón Social", "Razón Social"])
+    exp["Entidades"] = traducir(df[_ent], d_ent) if _ent else ""
+    exp["Op. Gravada"] = _col_or_blank(df, ["Op. Gravada", "Op Gravada",
+                                            "Base Imponible", "Gravada", "Valor Venta"])
+    exp["IGV"] = _col_or_blank(df, ["IGV"])
+    exp["Monto Neto"] = df["Monto Neto"]
+
+    _mon_c = buscar_col(df, ["Moneda"])
+    if _mon_c:
+        exp["Moneda"] = df[_mon_c]
+    else:
+        exp["Moneda"] = df["Cuenta Nombre"].map(
+            lambda c: "USD" if MONEDA_CUENTA.get(str(c).strip()) == "USD" else "PEN")
+
+    _tc = buscar_col(df, ["T/C", "TC", "Tipo de Cambio", "Tipo Cambio"])
+    if _tc:
+        exp["T/C"] = df[_tc]
+    else:
+        _mp = buscar_col(df, ["Monto PEN"])
+        if _mp:
+            _den = df["Monto"].abs().replace(0, pd.NA)
+            _tcv = (a_numero(df[_mp]).abs() / _den).round(4)
+            exp["T/C"] = _tcv.where(exp["Moneda"] == "USD", 1)
+        else:
+            exp["T/C"] = ""
+
+    exp["Comprobante"] = _col_or_blank(df, ["Comprobante", "Tipo Comprobante",
+                                            "Tipo de Comprobante", "Tipo Doc"])
+    exp["Serie"] = _col_or_blank(df, ["Serie"])
+    exp["N° Doc."] = _col_or_blank(df, ["N° Doc.", "N° Doc", "Nro Doc", "N° Documento",
+                                        "Nro Documento", "Número", "Numero", "Correlativo"])
+    exp["Estado"] = _col_or_blank(df, ["Estado"])
+    exp["Responsable"] = _col_or_blank(df, ["Responsable", "Registrado por", "Usuario"])
+
+    csv = exp.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "📥 Descargar movimientos (CSV)", csv,
         file_name=f"movimientos_{datetime.now().strftime('%Y%m%d')}.csv",
