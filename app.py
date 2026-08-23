@@ -269,6 +269,8 @@ d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
 d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
 d_ent = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
              ["Nombre / Razón Social", "Razón Social", "Nombre", "Entidad"])
+d_ent_ruc = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
+                 ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI", "Documento"])
 
 mov["Cuenta Nombre"] = traducir(mov["Cuenta"], d_cuentas)
 if "Cuenta Destino" in mov.columns:
@@ -593,6 +595,13 @@ if vista == "Movimientos":
     _ent = buscar_col(df, ["Entidad", "Entidades", "Entidad Nombre",
                            "Nombre / Razón Social", "Razón Social"])
     exp["Entidades"] = traducir(df[_ent], d_ent) if _ent else ""
+    _ruc_c = buscar_col(df, ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI"])
+    if _ruc_c:
+        exp["RUC"] = df[_ruc_c]
+    elif _ent:
+        exp["RUC"] = df[_ent].astype(str).str.strip().map(d_ent_ruc).fillna("")
+    else:
+        exp["RUC"] = ""
     exp["Op. Gravada"] = _col_or_blank(df, ["Op. Gravada", "Op Gravada",
                                             "Base Imponible", "Gravada", "Valor Venta"])
     exp["IGV"] = _col_or_blank(df, ["IGV"])
