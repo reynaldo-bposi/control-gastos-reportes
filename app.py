@@ -135,7 +135,7 @@ def conectar_sheets():
     return gspread.authorize(creds)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=1800)
 def cargar_hoja(nombre_hoja):
     gc = conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
@@ -156,8 +156,10 @@ def cargar_hoja(nombre_hoja):
     encabezados = [c.strip() for c in datos[fila_enc]]
     filas = datos[fila_enc + 1:]
     df = pd.DataFrame(filas, columns=encabezados)
-    df["_RowNumber"] = range(fila_enc + 2, fila_enc + 2 + len(filas))
-    df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
+    # Quitar filas totalmente vacías (vectorizado, sin apply fila por fila)
+    no_vacia = df.apply(lambda col: col.astype(str).str.strip()).ne("").any(axis=1)
+    df = df[no_vacia].reset_index(drop=True)
+    df["_RowNumber"] = range(fila_enc + 2, fila_enc + 2 + len(df))
     return df
 
 
@@ -250,17 +252,34 @@ mov = mov.dropna(subset=["Fecha"])
 
 cuentas["Saldo Inicial"] = a_numero(cuentas["Saldo Inicial"])
 
-# Moneda por cuenta (global): "USD" o "PEN"
-def _es_usd_glob(m):
-    m = str(m).upper()
-    return any(k in m for k in ("USD", "DOL", "US$", "$"))
+# Moneda por cuenta (global), generalizado a N monedas: guardamos el código.
+def moneda_code(m):
+    s = str(m).strip().upper()
+    if not s or s == "NAN":
+        return "PEN"
+    if any(k in s for k in ("PEN", "SOL", "S/")):
+        return "PEN"
+    if any(k in s for k in ("USD", "US$", "DOLAR", "DÓLAR", "DOL")):
+        return "USD"
+    if any(k in s for k in ("ARS", "PESO ARG", "ARGENTIN")):
+        return "ARS"
+    if s == "$":
+        return "USD"
+    if s.isalpha() and len(s) <= 4:
+        return s
+    return s[:3]
+
+SIMBOLOS = {"PEN": "S/", "USD": "US$", "ARS": "$ARS", "EUR": "€",
+            "CLP": "$CLP", "COP": "$COP", "MXN": "$MXN", "BRL": "R$"}
+
+def simbolo_de(code):
+    return SIMBOLOS.get(code, str(code))
 
 _col_mon_g = buscar_col(cuentas, ["Moneda"])
 MONEDA_CUENTA = {}
 if _col_mon_g:
     for _, _rc in cuentas.iterrows():
-        MONEDA_CUENTA[str(_rc["Nombre Cuenta"]).strip()] = \
-            "USD" if _es_usd_glob(_rc[_col_mon_g]) else "PEN"
+        MONEDA_CUENTA[str(_rc["Nombre Cuenta"]).strip()] = moneda_code(_rc[_col_mon_g])
 
 d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
@@ -308,10 +327,17 @@ hoy = datetime.now().date()
 # NAVEGACIÓN
 # ══════════════════════════════════════════
 
-vista = st.segmented_control(
-    "Vista", ["Movimientos", "Reportes", "Conciliación"],
-    label_visibility="collapsed", default="Movimientos", key="nav_main",
-)
+nav_c, ref_c = st.columns([5, 1])
+with nav_c:
+    vista = st.segmented_control(
+        "Vista", ["Movimientos", "Reportes", "Conciliación"],
+        label_visibility="collapsed", default="Movimientos", key="nav_main",
+    )
+with ref_c:
+    if st.button("🔄", help="Actualizar datos desde Google Sheets",
+                 use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 vista = vista or "Movimientos"
 
 # ══════════════════════════════════════════
@@ -490,10 +516,12 @@ if vista == "Movimientos":
     subset_filter = (proyecto_sel != "Todos") or (perfil_sel != "Todos") \
         or (tipo_sel != "Todos")
 
-    # Al mezclar monedas, el saldo/neto se calcula en soles (dólares convertidos).
+    # El saldo y el neto se calculan SIEMPRE en soles usando "Monto PEN"
+    # (los importes en dólares quedan solarizados con su tipo de cambio).
     mezcla = not mono_moneda
-    val_col = "_neto_soles" if mezcla else "Monto Neto"
-    sim_saldo = "S/" if mezcla else simbolo
+    val_col = "_neto_soles"
+    sim_saldo = "S/"
+    hay_usd = mezcla or (moneda_view == "USD")
 
     # Saldo corriente SOLO sobre lo mostrado: arranca desde la primera
     # transacción del filtro (incluida la fecha), sin arrastre ni saldo inicial.
@@ -525,11 +553,15 @@ if vista == "Movimientos":
             f'<div class="kpi-val {clase}">{sim_saldo} {fmt(saldo_actual)}</div></div>',
             unsafe_allow_html=True,
         )
-    if mezcla:
-        nota_mon = ("Estás sumando soles y dólares: los importes en dólares se "
-                    "convirtieron a soles" + ("." if HAY_SOLES_COL else
-                    " (falta la columna de monto en soles, se sumaron sin convertir)."))
-        st.caption("⚠️ " + nota_mon)
+    if hay_usd:
+        if mezcla:
+            nota_mon = ("Estás combinando soles y dólares: el saldo y el neto están "
+                        "en soles (los dólares se convirtieron con su T/C)")
+        else:
+            nota_mon = "El saldo y el neto se muestran en soles (dólares convertidos con su T/C)"
+        if not HAY_SOLES_COL:
+            nota_mon += " — ⚠️ falta la columna 'Monto PEN', se sumó sin convertir"
+        st.caption("ℹ️ " + nota_mon + ".")
 
     r1, r2 = st.columns([5, 1.5])
     with r1:
