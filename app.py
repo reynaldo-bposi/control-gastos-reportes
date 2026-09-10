@@ -275,6 +275,13 @@ SIMBOLOS = {"PEN": "S/", "USD": "US$", "ARS": "$ARS", "EUR": "€",
 def simbolo_de(code):
     return SIMBOLOS.get(code, str(code))
 
+NOMBRE_MONEDA = {"PEN": "soles", "USD": "dólares", "ARS": "pesos arg.",
+                 "EUR": "euros", "CLP": "pesos chil.", "COP": "pesos col.",
+                 "MXN": "pesos mex.", "BRL": "reales"}
+
+def nombre_moneda(code):
+    return NOMBRE_MONEDA.get(code, str(code))
+
 _col_mon_g = buscar_col(cuentas, ["Moneda"])
 MONEDA_CUENTA = {}
 if _col_mon_g:
@@ -292,6 +299,20 @@ d_ent_ruc = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
                  ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI", "Documento"])
 
 mov["Cuenta Nombre"] = traducir(mov["Cuenta"], d_cuentas)
+
+# Moneda a nivel de movimiento: usa el campo "Moneda" del propio movimiento;
+# si viene vacío, cae a la moneda de la cuenta.
+_col_mon_mov = buscar_col(mov, ["Moneda"])
+if _col_mon_mov:
+    _mm_raw = mov[_col_mon_mov].astype(str).str.strip()
+    mov["_moneda_code"] = mov[_col_mon_mov].map(moneda_code)
+    _mm_blank = _mm_raw.isin(["", "nan", "NaN", "None"])
+    mov.loc[_mm_blank, "_moneda_code"] = mov.loc[_mm_blank, "Cuenta Nombre"].map(
+        lambda c: MONEDA_CUENTA.get(str(c).strip(), "PEN"))
+else:
+    mov["_moneda_code"] = mov["Cuenta Nombre"].map(
+        lambda c: MONEDA_CUENTA.get(str(c).strip(), "PEN"))
+
 if "Cuenta Destino" in mov.columns:
     mov["Cuenta Destino Nombre"] = traducir(mov["Cuenta Destino"], d_cuentas)
 mov["Beneficiario Nombre"] = (
@@ -356,30 +377,30 @@ if vista == "Movimientos":
     col_ord = buscar_col(cuentas, ["Orden", "orden", "N° Orden"])
     col_mon = buscar_col(cuentas, ["Moneda"])
 
-    def _es_usd(m):
-        m = str(m).upper()
-        return any(k in m for k in ("USD", "DOL", "US$", "$"))
-
     cta = cuentas.copy()
     if solo_activos and col_act:
         cta = cta[cta[col_act].astype(str).str.strip().str.lower().isin(ACTIVOS)]
     cta["_ord"] = a_numero(cta[col_ord]) if col_ord else range(len(cta))
-    cta["_cur"] = (cta[col_mon].map(lambda m: "USD" if _es_usd(m) else "PEN")
-                   if col_mon else "PEN")
-    cta["_pri"] = cta["_cur"].map({"PEN": 0, "USD": 1}).fillna(9)
+    cta["_cur"] = cta[col_mon].map(moneda_code) if col_mon else "PEN"
+
+    # Orden de monedas: PEN primero, USD segundo, el resto alfabético.
+    _pref_mon = {"PEN": 0, "USD": 1}
+    _cur_presentes = [c for c in dict.fromkeys(cta["_cur"]) if str(c).strip()]
+    monedas_ctas = sorted(_cur_presentes, key=lambda c: (_pref_mon.get(c, 2), c))
+    _pri_map = {c: i for i, c in enumerate(monedas_ctas)}
+    cta["_pri"] = cta["_cur"].map(_pri_map).fillna(99)
     cta = cta.sort_values(["_pri", "_ord", "Nombre Cuenta"])
 
     cta_moneda = dict(zip(cta["Nombre Cuenta"].astype(str).str.strip(), cta["_cur"]))
-    hay_soles = bool((cta["_cur"] == "PEN").any())
-    hay_usd = bool((cta["_cur"] == "USD").any())
 
     opciones_cuenta = ["Todas"]
     etiquetas = {"Todas": "Todas las cuentas"}
-    if hay_soles and hay_usd:
-        opciones_cuenta.append("Todas soles")
-        etiquetas["Todas soles"] = "Todas — en soles (S/)"
-        opciones_cuenta.append("Todas dólares")
-        etiquetas["Todas dólares"] = "Todas — en dólares (US$)"
+    # Una opción "Todas — <moneda>" por cada moneda presente (solo si hay >1).
+    if len(monedas_ctas) > 1:
+        for _c in monedas_ctas:
+            _op = f"Todas {_c}"
+            opciones_cuenta.append(_op)
+            etiquetas[_op] = f"Todas — en {nombre_moneda(_c)} ({simbolo_de(_c)})"
     moneda_actual = None
     for _, r in cta.iterrows():
         nombre = str(r["Nombre Cuenta"]).strip()
@@ -387,7 +408,7 @@ if vista == "Movimientos":
             continue
         if r["_cur"] != moneda_actual:
             moneda_actual = r["_cur"]
-            sep = "── Soles ──" if moneda_actual == "PEN" else "── Dólares ──"
+            sep = f"── {nombre_moneda(moneda_actual).capitalize()} ──"
             opciones_cuenta.append(sep)
             etiquetas[sep] = sep
         opciones_cuenta.append(nombre)
@@ -491,18 +512,16 @@ if vista == "Movimientos":
     if cuenta_sel == "Todas":
         cuentas_incl = set(cta["Nombre Cuenta"].astype(str).str.strip())
         moneda_view = "PEN"
-    elif cuenta_sel == "Todas soles":
-        cuentas_incl = set(cta[cta["_cur"] == "PEN"]["Nombre Cuenta"].astype(str).str.strip())
-        moneda_view = "PEN"
-    elif cuenta_sel == "Todas dólares":
-        cuentas_incl = set(cta[cta["_cur"] == "USD"]["Nombre Cuenta"].astype(str).str.strip())
-        moneda_view = "USD"
+    elif cuenta_sel.startswith("Todas "):
+        _code = cuenta_sel.split(" ", 1)[1]
+        cuentas_incl = set(cta[cta["_cur"] == _code]["Nombre Cuenta"].astype(str).str.strip())
+        moneda_view = _code
     else:
         cuentas_incl = {cuenta_sel}
         moneda_view = cta_moneda.get(cuenta_sel, "PEN")
 
-    simbolo = "US$" if moneda_view == "USD" else "S/"
-    varias_ctas = cuenta_sel in ("Todas", "Todas soles", "Todas dólares")
+    simbolo = simbolo_de(moneda_view)
+    varias_ctas = (cuenta_sel == "Todas") or cuenta_sel.startswith("Todas ")
     mono_moneda = len({cta_moneda.get(c, "PEN") for c in cuentas_incl}) <= 1
 
     base = mov[mov["Cuenta Nombre"].isin(cuentas_incl)].copy()
@@ -536,6 +555,21 @@ if vista == "Movimientos":
     egresos = df[df[val_col] < 0][val_col].sum()
     saldo_actual = df[val_col].sum()
 
+    # Desglose por moneda: neto en MONTO ORIGINAL (con signo), agrupado por la
+    # moneda del propio movimiento. Ordenado PEN, USD, y luego el resto.
+    if "_moneda_code" in df.columns and len(df):
+        por_mon = df.groupby("_moneda_code")["Monto Neto"].sum()
+        _ord_mon = sorted(por_mon.index,
+                          key=lambda c: ({"PEN": 0, "USD": 1}.get(c, 2), c))
+        por_mon = por_mon.reindex(_ord_mon)
+    else:
+        por_mon = pd.Series(dtype=float)
+    monedas_sel = list(por_mon.index)
+    # Se muestra el desglose si hay más de una moneda, o si la única no es PEN
+    # (cuando todo es soles el "original" coincide con el neto en soles).
+    mostrar_desglose = (len(monedas_sel) > 1) or \
+        (len(monedas_sel) == 1 and monedas_sel[0] != "PEN")
+
     etiqueta_saldo = "Neto (filtrado)" if subset_filter else "Saldo acumulado"
 
     k1, k2 = st.columns(2)
@@ -553,14 +587,25 @@ if vista == "Movimientos":
             f'<div class="kpi-val {clase}">{sim_saldo} {fmt(saldo_actual)}</div></div>',
             unsafe_allow_html=True,
         )
-    if hay_usd:
-        if mezcla:
-            nota_mon = ("Estás combinando soles y dólares: el saldo y el neto están "
-                        "en soles (los dólares se convirtieron con su T/C)")
-        else:
-            nota_mon = "El saldo y el neto se muestran en soles (dólares convertidos con su T/C)"
+    if mostrar_desglose:
+        chips = []
+        for _c in monedas_sel:
+            _v = por_mon[_c]
+            _cls = "pos" if _v >= 0 else "neg"
+            _sg = "+" if _v >= 0 else "-"
+            chips.append(
+                f'<span class="{_cls}">{_sg}{simbolo_de(_c)} {fmt(abs(_v))}</span>'
+            )
+        st.markdown(
+            f'<div class="kpi"><div class="kpi-label">Por moneda · neto en monto original</div>'
+            f'<div class="kpi-doble">{"".join(chips)}</div></div>',
+            unsafe_allow_html=True,
+        )
+        nota_mon = ("El saldo y el neto de arriba están en soles (cada movimiento "
+                    "convertido con su T/C); el desglose muestra cada moneda en su "
+                    "valor original y no son sumables entre sí")
         if not HAY_SOLES_COL:
-            nota_mon += " — ⚠️ falta la columna 'Monto PEN', se sumó sin convertir"
+            nota_mon += " — ⚠️ falta la columna 'Monto PEN', el neto en soles se sumó sin convertir"
         st.caption("ℹ️ " + nota_mon + ".")
 
     r1, r2 = st.columns([5, 1.5])
@@ -591,10 +636,13 @@ if vista == "Movimientos":
         if f != fecha_actual:
             html.append(f'<div class="mov-fecha">{f}</div>')
             fecha_actual = f
-        signo = "pos" if r["Monto Neto"] >= 0 else "neg"
-        sim_r = "US$" if cta_moneda.get(str(r["Cuenta Nombre"]).strip()) == "USD" else "S/"
-        monto = f"{'+' if r['Monto Neto'] >= 0 else '-'}{sim_r} {fmt(abs(r['Monto Neto']))}"
-        extra = f" · {r['Cuenta Nombre']}" if varias_ctas else ""
+        # El detalle de cada transacción se muestra SIEMPRE en soles.
+        _val = r["_neto_soles"]
+        signo = "pos" if _val >= 0 else "neg"
+        monto = f"{'+' if _val >= 0 else '-'}S/ {fmt(abs(_val))}"
+        _mc = r.get("_moneda_code", "PEN")
+        tag_mon = f" · {_mc}" if _mc != "PEN" else ""
+        extra = (f" · {r['Cuenta Nombre']}" if varias_ctas else "") + tag_mon
         saldo_html = (f'<span class="mov-saldo">Saldo: {sim_saldo} '
                       f'{fmt(r["Saldo Cierre"])}</span>')
         html.append(
@@ -706,8 +754,8 @@ elif vista == "Reportes":
     if solo_act_r and col_act:
         ctar = ctar[ctar[col_act].astype(str).str.strip().str.lower().isin(ACTIVOS)]
     ctar["_ord"] = a_numero(ctar[col_ord]) if col_ord else range(len(ctar))
-    ctar["_mon"] = ctar[col_mon].astype(str).str.strip().str.upper() if col_mon else "PEN"
-    ctar["_pri"] = ctar["_mon"].map({"PEN": 0, "USD": 1}).fillna(9)
+    ctar["_mon"] = ctar[col_mon].map(moneda_code) if col_mon else "PEN"
+    ctar["_pri"] = ctar["_mon"].map(lambda c: {"PEN": 0, "USD": 1}.get(c, 2))
     ctar = ctar.sort_values(["_pri", "_mon", "_ord", "Nombre Cuenta"])
 
     opc_cta = ["Todas"]
@@ -719,7 +767,7 @@ elif vista == "Reportes":
             continue
         if r["_mon"] != mon_act:
             mon_act = r["_mon"]
-            sp = f"── {mon_act} ──"
+            sp = f"── {nombre_moneda(mon_act).capitalize()} ──"
             opc_cta.append(sp)
             etq_cta[sp] = sp
         opc_cta.append(nom)
@@ -866,19 +914,22 @@ elif vista == "Reportes":
     if proy_r != "Todos":
         dfr = dfr[dfr["Proyecto Nombre"] == proy_r]
 
-    # Moneda de la vista: si mezcla soles y dólares -> solarizar (usar Monto PEN)
-    _monedas_r = {MONEDA_CUENTA.get(str(c).strip(), "PEN") for c in _incl_r}
-    mezcla_r = len(_monedas_r) > 1
-    sr = "US$" if (not mezcla_r and _monedas_r == {"USD"}) else "S/"
+    # Reportes SIEMPRE en soles: todo se solariza con "Monto PEN" (_neto_soles),
+    # sin importar la moneda de las cuentas seleccionadas.
     dfr = dfr.copy()
-    if mezcla_r:
-        dfr["Monto Neto"] = dfr["_neto_soles"]
+    dfr["Monto Neto"] = dfr["_neto_soles"]
+    sr = "S/"
 
     real = dfr[dfr["Tipo"] != "Transferencia"]
 
-    if mezcla_r:
-        st.caption("⚠️ Estás combinando cuentas en soles y dólares: los importes "
-                   "en dólares se muestran solarizados (convertidos con su tipo de cambio).")
+    # Aviso solo si la selección mezcla monedas (los montos ya están en soles).
+    _monedas_r = {MONEDA_CUENTA.get(str(c).strip(), "PEN") for c in _incl_r}
+    if len(_monedas_r) > 1:
+        st.caption("ℹ️ La selección incluye varias monedas; todos los importes se "
+                   "muestran en soles (cada movimiento convertido con su tipo de cambio).")
+    if not HAY_SOLES_COL:
+        st.caption("⚠️ Falta la columna 'Monto PEN' en el sheet: los importes se "
+                   "sumaron sin convertir a soles.")
 
     act = real[(real["Fecha"].dt.date >= d_ini) & (real["Fecha"].dt.date <= d_fin)]
     if a_ini:
