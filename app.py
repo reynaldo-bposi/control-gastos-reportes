@@ -181,6 +181,23 @@ def buscar_col(df, opciones):
     return None
 
 
+def _norm_col(s):
+    # minúsculas + colapsa cualquier espacio (incluye NBSP) a uno solo
+    return " ".join(str(s).strip().lower().split())
+
+
+def buscar_col_norm(df, opciones):
+    """Como buscar_col pero ignora mayúsculas y diferencias de espacios."""
+    if df is None or getattr(df, "empty", True):
+        return None
+    norm_map = {_norm_col(c): c for c in df.columns}
+    for o in opciones:
+        c = norm_map.get(_norm_col(o))
+        if c is not None:
+            return c
+    return None
+
+
 def mapa(df, cols_id, cols_nombre):
     if df is None or df.empty:
         return {}
@@ -332,7 +349,17 @@ if _col_mon_g:
 
 d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
-d_benef_ruc = mapa_ruc(benef, ["ID"])
+# RUC/DNI del beneficiario: se usa el campo "N° RUC / DNI" de la tabla
+# Beneficiarios, cruzando su "Id" con el campo "Beneficiario" del movimiento.
+_id_benef = buscar_col_norm(benef, ["Id", "ID", "ID_Beneficiario", "ID Beneficiario"])
+_ruc_benef = buscar_col_norm(
+    benef, ["N° RUC / DNI", "N° RUC/DNI", "N°RUC/DNI", "Nº RUC / DNI",
+            "N° RUC / DNI ", "RUC / DNI", "RUC/DNI", "N° RUC", "RUC", "DNI"])
+if not getattr(benef, "empty", True) and _id_benef and _ruc_benef:
+    d_benef_ruc = dict(zip(benef[_id_benef].astype(str).str.strip(),
+                           benef[_ruc_benef].astype(str).str.strip()))
+else:
+    d_benef_ruc = mapa_ruc(benef, ["Id", "ID"])   # respaldo por contenido
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
 d_sub_pcge = mapa(subcats, ["ID_SubCategoría", "ID"],
