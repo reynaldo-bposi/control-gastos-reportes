@@ -296,6 +296,10 @@ d_benef_ruc = mapa(benef, ["ID"],
                     "N° RUC/DNI", "RUC/DNI beneficiario"])
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
+d_sub_pcge = mapa(subcats, ["ID_SubCategoría", "ID"],
+                  ["PCGE", "Código PCGE", "Codigo PCGE", "Cuenta Contable",
+                   "Cuenta contable", "Cuenta PCGE", "Código Cuenta", "Codigo Cuenta",
+                   "Cuenta", "Código", "Codigo", "N° Cuenta", "Nº Cuenta", "Cta Contable"])
 d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
 d_ent = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
              ["Nombre / Razón Social", "Razón Social", "Nombre", "Entidad"])
@@ -673,6 +677,15 @@ if vista == "Movimientos":
     exp["Cuenta"] = df.get("Cuenta Nombre", "")
     exp["Descripción"] = df.get("Desc", "")
     exp["Categoría"] = df.get("Cat Nombre", "")
+    exp["Subcategoría"] = df.get("Sub Nombre", "")
+    # Cuenta contable (PCGE): vive a nivel de subcategoría; se cruza por el ID
+    # de subcategoría del movimiento.
+    if "Sub Categ." in df.columns:
+        exp["Cuenta Contable"] = (df["Sub Categ."].astype(str).str.strip()
+                                  .map(d_sub_pcge).fillna(""))
+        exp["Cuenta Contable"] = exp["Cuenta Contable"].replace("nan", "").fillna("")
+    else:
+        exp["Cuenta Contable"] = ""
     exp["Proyecto"] = df.get("Proyecto Nombre", "")
     exp["Tipo Mov."] = df.get("Tipo", "")
     exp["Perfil"] = _col_or_blank(df, ["Perfil"])
