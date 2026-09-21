@@ -290,6 +290,10 @@ if _col_mon_g:
 
 d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
+d_benef_ruc = mapa(benef, ["ID"],
+                   ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI", "RUC / Documento",
+                    "DNI/RUC", "N° Documento", "Nro Documento", "Documento",
+                    "N° RUC/DNI", "RUC/DNI beneficiario"])
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
 d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
@@ -675,13 +679,26 @@ if vista == "Movimientos":
     _ent = buscar_col(df, ["Entidad", "Entidades", "Entidad Nombre",
                            "Nombre / Razón Social", "Razón Social"])
     exp["Entidades"] = traducir(df[_ent], d_ent) if _ent else ""
-    _ruc_c = buscar_col(df, ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI"])
-    if _ruc_c:
-        exp["RUC"] = df[_ruc_c]
-    elif _ent:
-        exp["RUC"] = df[_ent].astype(str).str.strip().map(d_ent_ruc).fillna("")
+
+    # RUC: sale de la tabla Beneficiarios, cruzando por el ID de beneficiario
+    # del movimiento. Si algún registro no tiene beneficiario o su ficha no trae
+    # RUC, se cae (en orden) a una columna RUC del propio movimiento y, en último
+    # caso, al RUC de Entidades.
+    if "Beneficiario" in df.columns:
+        exp["RUC"] = (df["Beneficiario"].astype(str).str.strip()
+                      .map(d_benef_ruc).fillna(""))
     else:
         exp["RUC"] = ""
+
+    _ruc_c = buscar_col(df, ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI"])
+    _vacio = exp["RUC"].astype(str).str.strip() == ""
+    if _ruc_c is not None and _vacio.any():
+        exp.loc[_vacio, "RUC"] = df.loc[_vacio, _ruc_c].astype(str).str.strip()
+    _vacio = exp["RUC"].astype(str).str.strip() == ""
+    if _ent and _vacio.any():
+        exp.loc[_vacio, "RUC"] = (df.loc[_vacio, _ent].astype(str).str.strip()
+                                  .map(d_ent_ruc).fillna(""))
+    exp["RUC"] = exp["RUC"].replace("nan", "").fillna("")
     exp["Op. Gravada"] = _col_or_blank(df, ["Op. Gravada", "Op Gravada",
                                             "Base Imponible", "Gravada", "Valor Venta"])
     exp["IGV"] = _col_or_blank(df, ["IGV"])
@@ -720,6 +737,9 @@ if vista == "Movimientos":
                                         "Nro Documento", "Número", "Numero", "Correlativo"])
     exp["Estado"] = _col_or_blank(df, ["Estado"])
     exp["Responsable"] = _col_or_blank(df, ["Responsable", "Registrado por", "Usuario"])
+    exp["Notas"] = _col_or_blank(df, ["Notas", "Nota", "Observaciones", "Observación",
+                                      "Observacion", "Comentario", "Comentarios",
+                                      "Detalle", "Glosa"])
 
     csv = exp.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
