@@ -196,6 +196,48 @@ def traducir(serie, dic):
     return s.map(dic).fillna(s)
 
 
+def _mejor_col_ruc(dfx):
+    """Elige la columna que contiene el NÚMERO de RUC/documento, no la del tipo
+    (cuyos valores son 'RUC'/'DNI'). Se apoya en el contenido: prefiere columnas
+    cuyos valores sean mayormente numéricos y de 8+ dígitos."""
+    if dfx is None or dfx.empty:
+        return None
+    claves = ("ruc", "documento", "n° doc", "nro doc", "ndoc", "dni", "identific")
+    cands = [c for c in dfx.columns
+             if any(k in str(c).lower() for k in claves)]
+    if not cands:
+        return None
+
+    def _pct_num(c):
+        vals = dfx[c].astype(str).str.replace(r"\D", "", regex=True).str.strip()
+        return (vals.str.len() >= 8).mean() if len(vals) else 0
+
+    def _score(c):
+        nombre = str(c).lower()
+        bonus = 0.5 if any(k in nombre for k in ("ruc", "n°", "nro", "numero",
+                                                 "número", "doc")) else 0
+        penal = 0.8 if any(k in nombre for k in ("tipo", "clase", "categoria",
+                                                 "categoría")) else 0
+        return _pct_num(c) + bonus - penal
+
+    mejor = max(cands, key=_score)
+    if _pct_num(mejor) < 0.2:      # ni el mejor tiene números -> no sirve
+        return None
+    return mejor
+
+
+def mapa_ruc(dfx, cols_id):
+    """id -> número de RUC, eligiendo la columna del número por su contenido."""
+    if dfx is None or dfx.empty:
+        return {}
+    ci = buscar_col(dfx, cols_id)
+    col = _mejor_col_ruc(dfx)
+    if not ci or not col:
+        return {}
+    return dict(zip(dfx[ci].astype(str).str.strip(),
+                    dfx[col].astype(str).str.strip()))
+
+
 def cargar_opcional(nombre):
     try:
         return cargar_hoja(nombre)
@@ -290,10 +332,7 @@ if _col_mon_g:
 
 d_cuentas = mapa(cuentas, ["ID"], ["Nombre Cuenta"])
 d_benef = mapa(benef, ["ID"], ["Nombre / Razón Social", "Nombre"])
-d_benef_ruc = mapa(benef, ["ID"],
-                   ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI", "RUC / Documento",
-                    "DNI/RUC", "N° Documento", "Nro Documento", "Documento",
-                    "N° RUC/DNI", "RUC/DNI beneficiario"])
+d_benef_ruc = mapa_ruc(benef, ["ID"])
 d_cats = mapa(cats, ["ID_Categoría", "ID"], ["Categoría", "Nombre"])
 d_subs = mapa(subcats, ["ID_SubCategoría", "ID"], ["Sub Categoría", "Nombre"])
 d_sub_pcge = mapa(subcats, ["ID_SubCategoría", "ID"],
@@ -303,8 +342,7 @@ d_sub_pcge = mapa(subcats, ["ID_SubCategoría", "ID"],
 d_proy = mapa(proyectos, ["ID"], ["Nombre Proyecto", "Nombre"])
 d_ent = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
              ["Nombre / Razón Social", "Razón Social", "Nombre", "Entidad"])
-d_ent_ruc = mapa(entidades, ["ID", "ID_Entidad", "ID Entidad"],
-                 ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI", "Documento"])
+d_ent_ruc = mapa_ruc(entidades, ["ID", "ID_Entidad", "ID Entidad"])
 
 mov["Cuenta Nombre"] = traducir(mov["Cuenta"], d_cuentas)
 
@@ -703,7 +741,7 @@ if vista == "Movimientos":
     else:
         exp["RUC"] = ""
 
-    _ruc_c = buscar_col(df, ["RUC", "Ruc", "N° RUC", "RUC/DNI", "RUC / DNI"])
+    _ruc_c = _mejor_col_ruc(df)
     _vacio = exp["RUC"].astype(str).str.strip() == ""
     if _ruc_c is not None and _vacio.any():
         exp.loc[_vacio, "RUC"] = df.loc[_vacio, _ruc_c].astype(str).str.strip()
