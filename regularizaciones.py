@@ -159,42 +159,52 @@ def render(mov, conectar_sheets, SHEET_ID):
                         # Conectar a la Sheet
                         gc = conectar_sheets()
                         sh = gc.open_by_key(SHEET_ID)
-                        ws = sh.worksheet("Movimientos")
                         
-                        # Obtener índices de columnas
-                        header_row = list(mov.columns)
+                        # Buscar la hoja de Movimientos (buscar por nombre, ignora emojis y mayúsculas)
+                        ws = None
+                        for worksheet in sh.worksheets():
+                            # Buscar hojas que contengan "Movimientos" en el título
+                            if "movimientos" in worksheet.title.lower():
+                                ws = worksheet
+                                break
                         
-                        try:
-                            idx_id_reg = header_row.index("ID Trf Regularizada") + 1
-                        except:
-                            st.error("❌ No encontré 'ID Trf Regularizada'")
-                            idx_id_reg = None
-                        
-                        try:
-                            idx_estado = header_row.index("Estado") + 1
-                        except:
-                            st.error("❌ No encontré 'Estado'")
-                            idx_estado = None
-                        
-                        if not (idx_id_reg and idx_estado):
-                            st.error("❌ Faltan columnas en el DataFrame")
+                        if ws is None:
+                            st.error("❌ No encontré la hoja 'Movimientos' en la Sheet. Hojas disponibles: " + ", ".join([w.title for w in sh.worksheets()]))
                         else:
-                            # Actualizar registros
-                            count = 0
-                            for _, row in df_gastos.iterrows():
-                                row_num = int(row["_RowNumber"])
-                                
-                                # Copiar ID de la transferencia seleccionada
-                                ws.update_cell(row_num, idx_id_reg, id_transf_selected)
-                                ws.update_cell(row_num, idx_estado, "Regularizado")
-                                count += 1
+                            # Obtener índices de columnas
+                            header_row = list(mov.columns)
                             
-                            if count > 0:
-                                st.success(f"✅ {count} gasto{'s' if count > 1 else ''} regularizado{'s' if count > 1 else ''} con ID: {id_transf_selected}")
-                                st.cache_data.clear()
-                                st.balloons()
+                            try:
+                                idx_id_reg = header_row.index("ID Trf Regularizada") + 1
+                            except:
+                                st.error("❌ No encontré 'ID Trf Regularizada'")
+                                idx_id_reg = None
+                            
+                            try:
+                                idx_estado = header_row.index("Estado") + 1
+                            except:
+                                st.error("❌ No encontré 'Estado'")
+                                idx_estado = None
+                            
+                            if not (idx_id_reg and idx_estado):
+                                st.error("❌ Faltan columnas en el DataFrame")
                             else:
-                                st.warning("⚠️ No se pudieron regularizar")
+                                # Actualizar registros
+                                count = 0
+                                for _, row in df_gastos.iterrows():
+                                    row_num = int(row["_RowNumber"])
+                                    
+                                    # Copiar ID de la transferencia seleccionada
+                                    ws.update_cell(row_num, idx_id_reg, id_transf_selected)
+                                    ws.update_cell(row_num, idx_estado, "Regularizado")
+                                    count += 1
+                                
+                                if count > 0:
+                                    st.success(f"✅ {count} gasto{'s' if count > 1 else ''} regularizado{'s' if count > 1 else ''} con ID: {id_transf_selected}")
+                                    st.cache_data.clear()
+                                    st.balloons()
+                                else:
+                                    st.warning("⚠️ No se pudieron regularizar")
                     
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
