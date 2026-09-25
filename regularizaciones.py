@@ -168,22 +168,16 @@ def render(mov, conectar_sheets, SHEET_ID):
                     st.error("⚠️ Debes confirmar antes de continuar")
                 else:
                     try:
-                        # Conectar a la Sheet
+                        # Obtener fila de encabezados del DataFrame que ya tenemos
+                        # En lugar de conectar de nuevo al Sheet (cuota)
+                        
+                        # Conectar a la Sheet SOLO para escribir
                         gc = conectar_sheets()
                         sh = gc.open_by_key(SHEET_ID)
                         ws = sh.worksheet("Movimientos")
                         
-                        # Obtener TODOS los datos
-                        datos = ws.get_all_values()
-                        
-                        # Buscar fila de encabezados (como hace app.py)
-                        fila_enc = 0
-                        for i, fila in enumerate(datos[:4]):
-                            if sum(1 for c in fila if str(c).strip()) >= 2:
-                                fila_enc = i
-                                break
-                        
-                        header_row = [c.strip() for c in datos[fila_enc]]
+                        # Obtener encabezados desde el DataFrame mov
+                        header_row = list(mov.columns)
                         
                         # Buscar índices de columnas
                         idx_id_transf_orig = None
@@ -193,20 +187,20 @@ def render(mov, conectar_sheets, SHEET_ID):
                         try:
                             idx_id_transf_orig = header_row.index("ID Transferencia") + 1
                         except ValueError:
-                            st.error("❌ No encontré 'ID Transferencia'")
+                            st.error("❌ No encontré 'ID Transferencia' en el DataFrame")
                         
                         try:
                             idx_id_trf_regularizada = header_row.index("ID Trf Regularizada") + 1
                         except ValueError:
-                            st.error("❌ No encontré 'ID Trf Regularizada'")
+                            st.error("❌ No encontré 'ID Trf Regularizada' en el DataFrame")
                         
                         try:
                             idx_estado = header_row.index("Estado") + 1
                         except ValueError:
-                            st.error("❌ No encontré 'Estado'")
+                            st.error("❌ No encontré 'Estado' en el DataFrame")
                         
                         if not idx_id_transf_orig or not idx_id_trf_regularizada or not idx_estado:
-                            st.error("❌ Faltan columnas en la Sheet")
+                            st.error("❌ Faltan columnas en el DataFrame")
                         else:
                             # Aplicar cambios
                             count = 0
