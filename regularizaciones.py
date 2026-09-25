@@ -250,4 +250,4 @@ def render(mov, conectar_sheets, SHEET_ID):
                         st.write("- La Sheet está accesible")
                         st.write("- Las credenciales tienen permiso de escritura")
                         st.write("- Los nombres de columnas son exactos")
-                        
+l
