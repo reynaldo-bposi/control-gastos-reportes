@@ -95,43 +95,26 @@ def render(mov, conectar_sheets, SHEET_ID):
             # Tabla detallada
             st.markdown('<div class="sub">📋 Detalle</div>', unsafe_allow_html=True)
             
-            # DEBUG: Mostrar qué columnas tenemos disponibles
-            with st.expander("🔧 Debug — Columnas disponibles"):
-                st.write(f"Total columnas en mov: {list(mov.columns)}")
-                st.write(f"Columnas en df_pend: {list(df_pend.columns)}")
+            # Detectar nombres de columnas (flexible)
+            desc_col = "Desc" if "Desc" in df_pend.columns else "Beneficiario Nombre"
+            cat_col = "Cat Nombre" if "Cat Nombre" in df_pend.columns else ("Categoría" if "Categoría" in df_pend.columns else None)
+            subcat_col = "Sub Nombre" if "Sub Nombre" in df_pend.columns else ("Subcategoría" if "Subcategoría" in df_pend.columns else None)
             
             df_show = df_pend[[
-                "Fecha", "Desc", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
+                "Fecha", desc_col, "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
             ]].copy()
             
-            # Agregar Categoría (concatenada con Subcategoría si existe)
-            categoria_col = None
-            subcategoria_col = None
-            
-            # Buscar columnas de Categoría (sin tildes también)
-            for col in df_pend.columns:
-                col_lower = col.lower().replace("á", "a")
-                if "categor" in col_lower and "sub" not in col_lower:
-                    categoria_col = col
-                    break
-            
-            # Buscar columnas de Subcategoría
-            for col in df_pend.columns:
-                col_lower = col.lower().replace("á", "a")
-                if "subcategor" in col_lower:
-                    subcategoria_col = col
-                    break
-            
-            if categoria_col:
-                if subcategoria_col:
-                    df_show["Categoría"] = (df_pend[categoria_col].astype(str).str.strip() + " > " + 
-                                           df_pend[subcategoria_col].astype(str).str.strip())
+            # Agregar Categoría concatenada si existe
+            if cat_col and cat_col in df_pend.columns:
+                if subcat_col and subcat_col in df_pend.columns:
+                    df_show["Categoría"] = (df_pend[cat_col].astype(str).str.strip() + " > " + 
+                                           df_pend[subcat_col].astype(str).str.strip())
                 else:
-                    df_show["Categoría"] = df_pend[categoria_col].astype(str).str.strip()
+                    df_show["Categoría"] = df_pend[cat_col].astype(str).str.strip()
                 
                 # Reordenar columnas
                 df_show = df_show[[
-                    "Fecha", "Desc", "Categoría", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
+                    "Fecha", desc_col, "Categoría", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
                 ]].copy()
                 col_names = ["Fecha", "Concepto", "Categoría", "Moneda", "Monto", "Cuenta", "Estado"]
             else:
@@ -187,8 +170,10 @@ def render(mov, conectar_sheets, SHEET_ID):
             st.warning(f"⚠️ Se actualizarán **{len(df_to_update)} registros**")
             
             # Mostrar tabla de preview
+            desc_col_prev = "Desc" if "Desc" in df_to_update.columns else "Beneficiario Nombre"
+            
             df_preview = df_to_update[[
-                "Fecha", "Desc", "ID Transferencia", "Monto Neto"
+                "Fecha", desc_col_prev, "ID Transferencia", "Monto Neto"
             ]].copy()
             df_preview.columns = ["Fecha", "Concepto", "ID a Copiar", "Monto"]
             df_preview["Monto"] = df_preview["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
