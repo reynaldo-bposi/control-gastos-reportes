@@ -53,6 +53,14 @@ def render(mov, conectar_sheets, SHEET_ID):
         st.markdown('<div class="titulo">Gastos Pendientes de Regularizar</div>', 
                     unsafe_allow_html=True)
         
+        # DEBUG: Mostrar todas las columnas disponibles
+        with st.expander("🔧 DEBUG — Columnas disponibles en mov"):
+            st.write("**Todas las columnas del DataFrame:**")
+            st.code(str(list(mov.columns)))
+            st.write(f"**Total: {len(mov.columns)} columnas**")
+            st.write("\nPrimeras 5 filas:")
+            st.dataframe(mov.head(5), use_container_width=True)
+        
         # Filtros
         col1, col2 = st.columns(2)
         with col1:
@@ -95,36 +103,54 @@ def render(mov, conectar_sheets, SHEET_ID):
             # Tabla detallada
             st.markdown('<div class="sub">📋 Detalle</div>', unsafe_allow_html=True)
             
-            # Detectar nombres de columnas (flexible)
-            desc_col = "Desc" if "Desc" in df_pend.columns else "Beneficiario Nombre"
-            cat_col = "Cat Nombre" if "Cat Nombre" in df_pend.columns else ("Categoría" if "Categoría" in df_pend.columns else None)
-            subcat_col = "Sub Nombre" if "Sub Nombre" in df_pend.columns else ("Subcategoría" if "Subcategoría" in df_pend.columns else None)
+            # Encontrar columna de descripción (flexible)
+            desc_col = None
+            for col in ["Desc", "Beneficiario Nombre", "Beneficiario"]:
+                if col in df_pend.columns:
+                    desc_col = col
+                    break
             
-            df_show = df_pend[[
-                "Fecha", desc_col, "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
-            ]].copy()
-            
-            # Agregar Categoría concatenada si existe
-            if cat_col and cat_col in df_pend.columns:
-                if subcat_col and subcat_col in df_pend.columns:
-                    df_show["Categoría"] = (df_pend[cat_col].astype(str).str.strip() + " > " + 
-                                           df_pend[subcat_col].astype(str).str.strip())
-                else:
-                    df_show["Categoría"] = df_pend[cat_col].astype(str).str.strip()
-                
-                # Reordenar columnas
-                df_show = df_show[[
-                    "Fecha", desc_col, "Categoría", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
-                ]].copy()
-                col_names = ["Fecha", "Concepto", "Categoría", "Moneda", "Monto", "Cuenta", "Estado"]
+            if not desc_col:
+                st.error("❌ No encontré columna de Concepto/Beneficiario")
             else:
-                col_names = ["Fecha", "Concepto", "Moneda", "Monto", "Cuenta", "Estado"]
-            
-            df_show.columns = col_names
-            df_show["Monto"] = df_show["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
-            df_show["Fecha"] = df_show["Fecha"].dt.strftime("%d/%m/%Y")
-            
-            st.dataframe(df_show, use_container_width=True, hide_index=True)
+                # Encontrar columna de categoría
+                cat_col = None
+                subcat_col = None
+                for col in ["Cat Nombre", "Categoría", "Categoria"]:
+                    if col in df_pend.columns:
+                        cat_col = col
+                        break
+                
+                for col in ["Sub Nombre", "Subcategoría", "Subcategoria"]:
+                    if col in df_pend.columns:
+                        subcat_col = col
+                        break
+                
+                # Armar tabla base
+                cols_base = ["Fecha", desc_col, "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"]
+                df_show = df_pend[cols_base].copy()
+                
+                # Agregar categoría si existe
+                if cat_col:
+                    if subcat_col:
+                        df_show["Categoría"] = (df_pend[cat_col].astype(str).str.strip() + " > " + 
+                                               df_pend[subcat_col].astype(str).str.strip())
+                    else:
+                        df_show["Categoría"] = df_pend[cat_col].astype(str).str.strip()
+                    
+                    # Reordenar
+                    df_show = df_show[[
+                        "Fecha", desc_col, "Categoría", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
+                    ]].copy()
+                    col_names = ["Fecha", "Concepto", "Categoría", "Moneda", "Monto", "Cuenta", "Estado"]
+                else:
+                    col_names = ["Fecha", "Concepto", "Moneda", "Monto", "Cuenta", "Estado"]
+                
+                df_show.columns = col_names
+                df_show["Monto"] = df_show["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
+                df_show["Fecha"] = df_show["Fecha"].dt.strftime("%d/%m/%Y")
+                
+                st.dataframe(df_show, use_container_width=True, hide_index=True)
             
             st.caption(f"{len(df_pend)} gastos pendientes en el rango seleccionado")
         else:
@@ -169,17 +195,25 @@ def render(mov, conectar_sheets, SHEET_ID):
             st.markdown('<div class="sub">📋 Vista Previa</div>', unsafe_allow_html=True)
             st.warning(f"⚠️ Se actualizarán **{len(df_to_update)} registros**")
             
+            # Encontrar columna de descripción
+            desc_col_prev = None
+            for col in ["Desc", "Beneficiario Nombre", "Beneficiario"]:
+                if col in df_to_update.columns:
+                    desc_col_prev = col
+                    break
+            
             # Mostrar tabla de preview
-            desc_col_prev = "Desc" if "Desc" in df_to_update.columns else "Beneficiario Nombre"
-            
-            df_preview = df_to_update[[
-                "Fecha", desc_col_prev, "ID Transferencia", "Monto Neto"
-            ]].copy()
-            df_preview.columns = ["Fecha", "Concepto", "ID a Copiar", "Monto"]
-            df_preview["Monto"] = df_preview["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
-            df_preview["Fecha"] = df_preview["Fecha"].dt.strftime("%d/%m/%Y")
-            
-            st.dataframe(df_preview, use_container_width=True, hide_index=True)
+            if not desc_col_prev:
+                st.error("❌ No encontré columna de Concepto/Beneficiario en df_to_update")
+            else:
+                df_preview = df_to_update[[
+                    "Fecha", desc_col_prev, "ID Transferencia", "Monto Neto"
+                ]].copy()
+                df_preview.columns = ["Fecha", "Concepto", "ID a Copiar", "Monto"]
+                df_preview["Monto"] = df_preview["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
+                df_preview["Fecha"] = df_preview["Fecha"].dt.strftime("%d/%m/%Y")
+                
+                st.dataframe(df_preview, use_container_width=True, hide_index=True)
             
             st.markdown("")
             
