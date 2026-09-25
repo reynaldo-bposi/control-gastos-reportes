@@ -23,7 +23,7 @@ def render(mov, conectar_sheets, SHEET_ID):
     # TABS
     # ══════════════════════════════════════════
     
-    tab1, tab2 = st.tabs(["📋 Pendientes por Pagar", "✅ Registrar Regularizaciones"])
+    tab1, tab2 = st.tabs(["📋 Pendientes por Pag", "✅ Registrar Regularizacion"])
     
     # ══════════════════════════════════════════
     # TAB 1: PENDIENTES POR PAGAR
