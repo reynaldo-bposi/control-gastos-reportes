@@ -98,7 +98,32 @@ def render(mov, conectar_sheets, SHEET_ID):
             df_show = df_pend[[
                 "Fecha", "Desc", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
             ]].copy()
-            df_show.columns = ["Fecha", "Concepto", "Moneda", "Monto", "Cuenta", "Estado"]
+            
+            # Agregar Categoría (concatenada con Subcategoría si existe)
+            categoria_col = None
+            if "Categoría" in df_pend.columns:
+                categoria_col = "Categoría"
+            elif "Categoria" in df_pend.columns:
+                categoria_col = "Categoria"
+            
+            subcategoria_col = None
+            if "Subcategoría" in df_pend.columns:
+                subcategoria_col = "Subcategoría"
+            elif "Subcategoria" in df_pend.columns:
+                subcategoria_col = "Subcategoria"
+            
+            if categoria_col:
+                if subcategoria_col:
+                    df_show["Categoría"] = df_pend[categoria_col].astype(str) + " > " + df_pend[subcategoria_col].astype(str)
+                else:
+                    df_show["Categoría"] = df_pend[categoria_col].astype(str)
+                
+                # Reordenar columnas
+                df_show = df_show[[
+                    "Fecha", "Desc", "Categoría", "_moneda_mov", "Monto Neto", "Cuenta Nombre", "Estado"
+                ]]
+            
+            df_show.columns = ["Fecha", "Concepto", "Categoría", "Moneda", "Monto", "Cuenta", "Estado"] if categoria_col else ["Fecha", "Concepto", "Moneda", "Monto", "Cuenta", "Estado"]
             df_show["Monto"] = df_show["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
             df_show["Fecha"] = df_show["Fecha"].dt.strftime("%d/%m/%Y")
             
@@ -116,47 +141,55 @@ def render(mov, conectar_sheets, SHEET_ID):
         st.markdown('<div class="titulo">Registrar Regularizaciones</div>', 
                     unsafe_allow_html=True)
         
-        st.markdown("**Paso 1:** Ya realizaste las transferencias en tu app y tienes los IDs.")
-        st.markdown("**Paso 2:** Ingresa aquí los IDs de cada moneda.")
-        st.markdown("**Paso 3:** Haz clic en 'Ejecutar' para marcar los gastos como regularizados.")
+        st.markdown("**Paso 1:** Selecciona el rango de fechas de los gastos que vas a regularizar.")
+        st.markdown("**Paso 2:** Haz clic en 'Ejecutar' para copiar el ID Transferencia original a ID Trf Regularizada.")
         
         st.markdown("")  # Espaciador
         
-        # Inputs para IDs
-        st.markdown('<div class="sub">IDs de Transferencia</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            id_sol = st.text_input("Soles (SOL)", placeholder="REG-2026-09-SOL", key="id_sol_reg")
-        with col2:
-            id_usd = st.text_input("Dólares (USD)", placeholder="REG-2026-09-USD", key="id_usd_reg")
-        
         # Fechas
-        st.markdown('<div class="sub">Rango de Transacciones</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub">Rango de Transacciones a Regularizar</div>', unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         with col1:
-            fecha_inicio_reg = st.date_input("Desde", value=datetime(2026, 9, 1), key="reg_ejecular_inicio")
+            fecha_inicio_reg = st.date_input("Desde", value=datetime(2026, 9, 1), key="reg_ejecutar_inicio")
         with col2:
             fecha_fin_reg = st.date_input("Hasta", value=datetime(2026, 9, 30), key="reg_ejecutar_fin")
         
         st.markdown("")  # Espaciador
         
-        if st.button("✅ Ejecutar Regularización", use_container_width=True):
-            if not id_sol and not id_usd:
-                st.error("⚠️ Ingresa al menos un ID de transferencia (soles o dólares)")
-            else:
-                # Filtrar movimientos
-                mask = (
-                    (mov["Perfil"].astype(str).str.strip() == "Empresa") &
-                    (mov["Estado"].astype(str).str.strip() == "Pendiente regularizar") &
-                    (mov["Fecha"].dt.date >= fecha_inicio_reg) &
-                    (mov["Fecha"].dt.date <= fecha_fin_reg)
-                )
-                df_to_update = mov[mask].copy()
-                
-                if df_to_update.empty:
-                    st.warning("⚠️ No hay gastos para regularizar en ese rango")
+        # Filtrar movimientos para mostrar preview
+        mask = (
+            (mov["Perfil"].astype(str).str.strip() == "Empresa") &
+            (mov["Estado"].astype(str).str.strip() == "Pendiente regularizar") &
+            (mov["Fecha"].dt.date >= fecha_inicio_reg) &
+            (mov["Fecha"].dt.date <= fecha_fin_reg)
+        )
+        df_to_update = mov[mask].copy()
+        
+        if df_to_update.empty:
+            st.warning("⚠️ No hay gastos para regularizar en ese rango")
+        else:
+            st.markdown('<div class="sub">📋 Vista Previa</div>', unsafe_allow_html=True)
+            st.warning(f"⚠️ Se actualizarán **{len(df_to_update)} registros**")
+            
+            # Mostrar tabla de preview
+            df_preview = df_to_update[[
+                "Fecha", "Desc", "ID Transferencia", "Monto Neto"
+            ]].copy()
+            df_preview.columns = ["Fecha", "Concepto", "ID a Copiar", "Monto"]
+            df_preview["Monto"] = df_preview["Monto"].apply(lambda x: f"{fmt0(abs(x))}")
+            df_preview["Fecha"] = df_preview["Fecha"].dt.strftime("%d/%m/%Y")
+            
+            st.dataframe(df_preview, use_container_width=True, hide_index=True)
+            
+            st.markdown("")
+            
+            # Checkbox de confirmación
+            confirmar = st.checkbox("✅ Confirmo que deseo actualizar estos registros", key="confirmar_regularizacion")
+            
+            if st.button("✅ Ejecutar Regularización", use_container_width=True, disabled=not confirmar):
+                if not confirmar:
+                    st.error("⚠️ Debes confirmar antes de continuar")
                 else:
                     try:
                         # Conectar a la Sheet
@@ -169,10 +202,16 @@ def render(mov, conectar_sheets, SHEET_ID):
                         
                         # Buscar índice de las columnas
                         try:
-                            idx_id_transf = header_row.index("ID Transferencia") + 1
+                            idx_id_transf_orig = header_row.index("ID Transferencia") + 1
                         except ValueError:
                             st.error("❌ No encontré columna 'ID Transferencia' en la Sheet")
-                            idx_id_transf = None
+                            idx_id_transf_orig = None
+                        
+                        try:
+                            idx_id_trf_regularizada = header_row.index("ID Trf Regularizada") + 1
+                        except ValueError:
+                            st.error("❌ No encontré columna 'ID Trf Regularizada' en la Sheet")
+                            idx_id_trf_regularizada = None
                         
                         try:
                             idx_estado = header_row.index("Estado") + 1
@@ -180,42 +219,30 @@ def render(mov, conectar_sheets, SHEET_ID):
                             st.error("❌ No encontré columna 'Estado' en la Sheet")
                             idx_estado = None
                         
-                        if not idx_id_transf or not idx_estado:
+                        if not idx_id_transf_orig or not idx_id_trf_regularizada or not idx_estado:
                             st.error("❌ Error de configuración: columnas no encontradas")
                         else:
                             # Aplicar cambios
-                            if "Moneda" not in df_to_update.columns:
-                                df_to_update["Moneda"] = df_to_update.get("_moneda_code", "PEN")
-                            
-                            df_to_update["_moneda_mov"] = df_to_update["Moneda"].apply(moneda_code)
-                            
                             count = 0
                             for _, row in df_to_update.iterrows():
                                 row_num = int(row["_RowNumber"])
-                                moneda = row["_moneda_mov"]
+                                id_transferencia_original = row.get("ID Transferencia", "")
                                 
-                                # Asignar ID según moneda
-                                id_a_usar = None
-                                if moneda == "SOL" and id_sol:
-                                    id_a_usar = id_sol
-                                elif moneda == "USD" and id_usd:
-                                    id_a_usar = id_usd
-                                
-                                if id_a_usar:
-                                    ws.update_cell(row_num, idx_id_transf, id_a_usar)
+                                if id_transferencia_original and str(id_transferencia_original).strip():
+                                    # Copiar el ID Transferencia original a ID Trf Regularizada
+                                    ws.update_cell(row_num, idx_id_trf_regularizada, id_transferencia_original)
                                     ws.update_cell(row_num, idx_estado, "Regularizado")
                                     count += 1
                             
                             if count > 0:
                                 st.success(f"✅ {count} gastos marcados como Regularizado")
-                                st.info(f"• Soles: {len(df_to_update[df_to_update['_moneda_mov'] == 'SOL']) if id_sol else 0}")
-                                st.info(f"• Dólares: {len(df_to_update[df_to_update['_moneda_mov'] == 'USD']) if id_usd else 0}")
+                                st.info(f"Se copiaron los IDs de Transferencia original a ID Trf Regularizada")
                                 
                                 # Limpiar cache para recargar datos
                                 st.cache_data.clear()
                                 st.balloons()
                             else:
-                                st.warning("⚠️ No se asignó ningún ID (verifica que los IDs coincidan con las monedas)")
+                                st.warning("⚠️ No se encontraron gastos con ID Transferencia válido")
                     
                     except Exception as e:
                         st.error(f"❌ Error al actualizar la Sheet: {str(e)}")
