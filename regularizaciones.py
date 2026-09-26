@@ -90,14 +90,18 @@ def render(mov, conectar_sheets, SHEET_ID):
         
         # Para cada moneda, mostrar dropdown
         for moneda in monedas_presentes:
-            st.markdown(f'**De:** CC LABPOSI IBK {NOMBRE_MONEDA.get(moneda, moneda)}', unsafe_allow_html=True)
+            sr = SIMBOLOS.get(moneda, moneda)
+            st.markdown(f'**Transferencias a {sr}**', unsafe_allow_html=True)
             
-            # Filtrar transferencias de esa moneda: ENTRADAS (Monto > 0) a cuentas personales
+            # Filtrar transferencias: 
+            # - Monto > 0 (entradas a cuentas personales)
+            # - Cuenta Destino = "CC LABPOSI IBK Soles" (viene de la empresa)
+            # - ID Transferencia no usado
             mask_transf = (
-                (mov["Cuenta Nombre"].astype(str).str.strip() == "CC LABPOSI IBK Soles") &
                 (mov["Tipo Mov."].astype(str).str.strip() == "Transferencia") &
                 (mov["Monto Neto"] > 0) &
                 (mov["Moneda"] == moneda) &
+                (mov["Cuenta Destino Nombre"].astype(str).str.strip() == "CC LABPOSI IBK Soles") &
                 ~(mov["ID Transferencia"].astype(str).str.strip().isin(ids_usadas))
             )
             df_transf_moneda = mov[mask_transf].copy()
