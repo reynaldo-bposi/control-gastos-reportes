@@ -1568,6 +1568,13 @@ elif vista == "Reportes":
 
 
 # ══════════════════════════════════════════
+# VISTA: REGULARIZACIONES
+# ══════════════════════════════════════════
+
+elif vista == "Regularizaciones":
+    regularizaciones.render(mov, conectar_sheets, SHEET_ID)
+
+# ══════════════════════════════════════════
 # VISTA: CONCILIACIÓN
 # ══════════════════════════════════════════
 
