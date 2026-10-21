@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import calendar
 import plotly.graph_objects as go
 import conciliacion
-import regularizaciones
 
 # ══════════════════════════════════════════
 # CONFIGURACIÓN
@@ -425,7 +424,7 @@ hoy = datetime.now().date()
 nav_c, ref_c = st.columns([5, 1])
 with nav_c:
     vista = st.segmented_control(
-        "Vista", ["Movimientos", "Reportes", "Regularizaciones", "Conciliación"],
+        "Vista", ["Movimientos", "Reportes", "Conciliación"],
         label_visibility="collapsed", default="Movimientos", key="nav_main",
     )
 with ref_c:
@@ -814,6 +813,12 @@ if vista == "Movimientos":
     exp["Serie"] = _col_or_blank(df, ["Serie"])
     exp["N° Doc."] = _col_or_blank(df, ["N° Doc.", "N° Doc", "Nro Doc", "N° Documento",
                                         "Nro Documento", "Número", "Numero", "Correlativo"])
+    # Periodo Tributario: campo Text AAAA-MM de Movimientos. Se usan solo nombres
+    # específicos para no tomar la columna interna "Periodo" (mes derivado de la fecha).
+    exp["Periodo Tributario"] = _col_or_blank(
+        df, ["Periodo Tributario", "Período Tributario", "Periodo tributario",
+             "Período tributario", "Periodo Trib.", "Período Trib.", "Periodo Trib",
+             "Periodo Tributario (AAAA-MM)", "Periodo Tributario (YYYY-MM)"])
     exp["Estado"] = _col_or_blank(df, ["Estado"])
     exp["Responsable"] = _col_or_blank(df, ["Responsable", "Registrado por", "Usuario"])
     exp["Notas"] = _col_or_blank(df, ["Notas", "Nota", "Observaciones", "Observación",
@@ -1547,13 +1552,6 @@ elif vista == "Reportes":
                 f'Gasto acumulado vs presupuesto</div>'
                 f'{"".join(bloques)}</div>', unsafe_allow_html=True)
 
-
-# ══════════════════════════════════════════
-# VISTA: REGULARIZACIONES
-# ══════════════════════════════════════════
-
-elif vista == "Regularizaciones":
-    regularizaciones.render(mov, conectar_sheets, SHEET_ID)
 
 # ══════════════════════════════════════════
 # VISTA: CONCILIACIÓN
