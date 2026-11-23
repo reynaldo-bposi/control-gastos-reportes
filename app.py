@@ -778,9 +778,23 @@ if vista == "Movimientos":
         exp.loc[_vacio, "RUC"] = (df.loc[_vacio, _ent].astype(str).str.strip()
                                   .map(d_ent_ruc).fillna(""))
     exp["RUC"] = exp["RUC"].replace("nan", "").fillna("")
-    exp["Op. Gravada"] = _col_or_blank(df, ["Op. Gravada", "Op Gravada",
-                                            "Base Imponible", "Gravada", "Valor Venta"])
-    exp["IGV"] = _col_or_blank(df, ["IGV"])
+    # Op. Gravada e IGV salen con el signo del movimiento (egreso -> negativo,
+    # ingreso -> positivo), igual que Monto Neto. Se conserva en blanco lo vacío.
+    _signo = df["Monto Neto"].apply(lambda x: -1 if x < 0 else 1)
+
+    def _campo_firmado(cands):
+        c = buscar_col(df, cands)
+        if not c:
+            return ""
+        crudo = df[c].astype(str).str.strip()
+        blank = crudo.isin(["", "nan", "NaN", "None"])
+        val = a_numero(df[c]).abs() * _signo      # magnitud con el signo del neto
+        val = val.mask(val == 0, 0.0)             # evita -0.0
+        return val.where(~blank, "")
+
+    exp["Op. Gravada"] = _campo_firmado(["Op. Gravada", "Op Gravada",
+                                         "Base Imponible", "Gravada", "Valor Venta"])
+    exp["IGV"] = _campo_firmado(["IGV"])
     exp["Monto Neto"] = df["Monto Neto"]
 
     _mon_c = buscar_col(df, ["Moneda"])
@@ -814,6 +828,12 @@ if vista == "Movimientos":
     exp["Serie"] = _col_or_blank(df, ["Serie"])
     exp["N° Doc."] = _col_or_blank(df, ["N° Doc.", "N° Doc", "Nro Doc", "N° Documento",
                                         "Nro Documento", "Número", "Numero", "Correlativo"])
+    # Periodo Tributario: campo Text AAAA-MM de Movimientos. Se usan solo nombres
+    # específicos para no tomar la columna interna "Periodo" (mes derivado de la fecha).
+    exp["Periodo Tributario"] = _col_or_blank(
+        df, ["Periodo Tributario", "Período Tributario", "Periodo tributario",
+             "Período tributario", "Periodo Trib.", "Período Trib.", "Periodo Trib",
+             "Periodo Tributario (AAAA-MM)", "Periodo Tributario (YYYY-MM)"])
     exp["Estado"] = _col_or_blank(df, ["Estado"])
     exp["Responsable"] = _col_or_blank(df, ["Responsable", "Registrado por", "Usuario"])
     exp["Notas"] = _col_or_blank(df, ["Notas", "Nota", "Observaciones", "Observación",
